@@ -257,6 +257,7 @@ async function now(req,env) {
     return json({pending:true},202,env);
   }
   let tokens=await unseal(env,row.token_cipher);
+  let released=false;
   try {
     if(tokens.expires_at-Date.now()<60000) tokens=await refreshToken(env,tokens);
     let response=await fetch(CURRENT_ENDPOINT,{
@@ -273,6 +274,7 @@ async function now(req,env) {
       const retry=Math.max(3000,Math.min(300000,Number(response.headers.get("Retry-After")||"60")*1000));
       await env.DB.prepare("UPDATE overlays SET rate_limit_until=?,lock_until=0,token_cipher=? WHERE id=?")
         .bind(Date.now()+retry,await seal(env,tokens),row.id).run();
+      released=true;
       if(row.cache_json) return json({...JSON.parse(row.cache_json),stale:true},200,env);
       return json({error:"spotify_rate_limit",retryAfterMs:retry},429,env);
     }
@@ -291,13 +293,14 @@ async function now(req,env) {
     await env.DB.prepare(
       "UPDATE overlays SET token_cipher=?,cache_json=?,cache_until=?,rate_limit_until=0,lock_until=0 WHERE id=?"
     ).bind(await seal(env,tokens),JSON.stringify(result),Date.now()+NOW_CACHE_MS,row.id).run();
+    released=true;
     return json(result,200,env);
   } catch(error) {
     console.error("Spotify currently-playing error:",error.message);
     return json({error:"spotify_connection",message:"Не удалось обновить данные Spotify."},502,env);
   } finally {
-    // Release on all paths; when success has already reset the lease this is harmless.
-    await env.DB.prepare("UPDATE overlays SET lock_until=0 WHERE id=?").bind(row.id).run();
+    // Only unlock after early failures; success and 429 already released.
+    if(!released)await env.DB.prepare("UPDATE overlays SET lock_until=0 WHERE id=?").bind(row.id).run();
   }
 }
 export default {
