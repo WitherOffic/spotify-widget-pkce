@@ -9,7 +9,7 @@ test('public oEmbed image is primary; direct API image is not loaded needlessly'
     lookupPublic:async()=> 'https://img.example/public.jpg',
     backupUrl:'https://img.example/api.jpg',
     probe:async url=>{ tried.push(url); return true; },
-    delay:async()=>{},
+    delay:()=>new Promise(resolve=>setTimeout(resolve,20)),
   });
   assert.equal(result,'https://img.example/public.jpg');
   assert.deepEqual(tried,['https://img.example/public.jpg']);
