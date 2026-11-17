@@ -3,8 +3,8 @@
  * Copyright (C) 2026 contributors. GPL-3.0-or-later.
  * Pure functions shared by the overlay and offline tests.
  */
-export const DEFAULT_POLL_MS = 10000;
-export const MIN_POLL_MS = 5000;
+export const DEFAULT_POLL_MS = 3000;
+export const MIN_POLL_MS = 2000;
 export const MAX_POLL_MS = 60000;
 
 export function clamp(n, min, max) {
