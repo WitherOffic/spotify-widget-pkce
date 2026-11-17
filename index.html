@@ -1,91 +1,151 @@
 <!doctype html>
 <html lang="ru">
 <head>
-<meta charset="utf-8"/>
-<meta name="viewport" content="width=device-width,initial-scale=1"/>
-<meta name="referrer" content="no-referrer"/>
-<title>Wither Spotify Widget — Настройка</title>
-<link rel="stylesheet" href="./dashboard.css"/>
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width,initial-scale=1"/>
+  <meta name="referrer" content="no-referrer"/>
+  <meta name="theme-color" content="#10151b"/>
+  <title>Wither Spotify Widget — Панель стримера</title>
+  <link rel="stylesheet" href="./dashboard.css"/>
 </head>
 <body>
-<main>
-<header class="top">
-<div class="brand">Wither Spotify Widget</div>
-<h1>Твой Spotify в OBS</h1>
-<p>Подключи Spotify один раз, получи готовую ссылку и вставь её в источник «Браузер». Никаких JSON, дополнительных программ или входа в Spotify внутри OBS.</p>
-</header>
-<section class="card" id="setup">
-<h2>1. Подключить сервис</h2>
-<p>Для безопасной выдачи ссылок используется твой Cloudflare Worker. Он хранит Spotify-токены на сервере; OBS получает только ключ для чтения музыки.</p>
-<div class="field">
-<label for="workerUrl">Адрес Cloudflare Worker</label>
-<input id="workerUrl" type="url" placeholder="https://wither-spotify-widget-api.имя.workers.dev" autocomplete="off" spellcheck="false"/>
-</div>
-<div class="field">
-<label for="pairingKey">Ключ подключения (PAIRING_KEY)</label>
-<input id="pairingKey" type="password" placeholder="Секрет, который ты установил в Cloudflare" autocomplete="off"/>
-</div>
-<div class="controls">
-<button id="checkWorker" type="button" class="secondary">Проверить Worker</button>
-<button id="connectSpotify" type="button">Подключить Spotify</button>
-</div>
-<details>
-<summary>Где взять Worker и ключ?</summary>
-<p>Серверная часть находится в папке <code>worker/</code> репозитория. Для первого запуска нужно один раз развернуть её в Cloudflare, создать базу D1 и добавить два секретных значения. Подробные шаги — в <a href="https://github.com/WitherOffic/spotify-widget-pkce/blob/main/worker/README.md" target="_blank" rel="noopener">инструкции по настройке Worker</a>.</p>
-</details>
-<div id="setupStatus" class="status" hidden></div>
-</section>
-<section class="card" id="connected" hidden>
-<h2>2. Готовая ссылка для OBS</h2>
-<p>Spotify подключён. Скопируй эту ссылку в OBS → «Источники» → «Браузер». Авторизация в OBS больше не нужна.</p>
-<div class="field">
-<label for="overlayLink">Твоя индивидуальная ссылка</label>
-<input id="overlayLink" type="text" readonly spellcheck="false"/>
-</div>
-<div class="controls">
-<button id="copyLink" type="button">Скопировать ссылку</button>
-<button id="previewLink" type="button" class="secondary">Открыть оверлей</button>
-</div>
-<div class="inline">
-<div class="field">
-<label for="poll">Обновление</label>
-<select id="poll">
-<option value="3000">3 секунды</option>
-<option value="5000">5 секунд</option>
-<option value="10000">10 секунд</option>
-</select>
-</div>
-<div class="field">
-<label for="duration">Скрывать виджет</label>
-<select id="duration">
-<option value="0">Пока играет музыка</option>
-<option value="5">Через 5 секунд</option>
-<option value="8">Через 8 секунд</option>
-<option value="15">Через 15 секунд</option>
-</select>
-</div>
-</div>
-<div class="field"><label><input id="showCover" type="checkbox" checked style="width:auto;min-height:0;margin-right:8px"/>Показывать обложку</label></div>
-<div class="field"><label><input id="animateText" type="checkbox" checked style="width:auto;min-height:0;margin-right:8px"/>Анимация переключения треков</label></div>
-<p class="info">Ссылка содержит отдельный ключ только для чтения текущей музыки. Не публикуй её без необходимости: владелец ссылки сможет видеть воспроизводимые треки, но не получит доступ к управлению Spotify.</p>
-<div class="controls">
-<button id="rotateLink" type="button" class="secondary">Перевыпустить ссылку</button>
-<button id="disconnect" type="button" class="danger">Отключить Spotify</button>
-</div>
-<div id="linkStatus" class="status" hidden></div>
-</section>
-<section class="card">
-<h2>Проверить оформление</h2>
-<p>Демонстрация показывает переключение тестовых композиций без входа в Spotify и без Cloudflare Worker.</p>
-<div class="controls">
-<a href="./overlay.html?demo=1" target="_blank" rel="noopener"><button type="button" class="secondary">Посмотреть деморежим</button></a>
-</div>
-</section>
-<footer>
-Wither Spotify Widget — открытый проект под лицензией GPLv3. Данные о музыке предоставляются Spotify.
-Первоначальный интерфейс основан на <a href="https://github.com/nuttylmao/spotify-widget" target="_blank" rel="noopener">Spotify Widget от Nutty</a>.
-</footer>
-</main>
-<script type="module" src="./dashboard.js"></script>
+  <main class="shell">
+    <header class="hero">
+      <div class="eyebrow"><span class="brand-dot" aria-hidden="true"></span>WITHER SPOTIFY WIDGET <span class="tag">для OBS</span></div>
+      <h1>Твоя музыка.<br/><span>Твой стрим.</span></h1>
+      <p class="hero-caption">Подключи Spotify один раз, настрой отображение и скопируй готовую ссылку в OBS. Никаких отдельных приложений или авторизации внутри OBS.</p>
+      <div class="hero-points"><span>● Прямое обновление треков</span><span>● Плавная анимация</span><span>● Обложки и фон</span></div>
+    </header>
+
+    <section class="card" id="connected" hidden>
+      <div class="section-head">
+        <div>
+          <div class="kicker">ШАГ 1 · ПОДКЛЮЧЕНО</div>
+          <h2>Ссылка для OBS</h2>
+        </div>
+        <span class="connection-badge" id="connectionBadge">Проверка подключения</span>
+      </div>
+      <p>Вставь адрес в <b>OBS → Источники → Браузер</b>. Для этого источника больше не требуется вход в Spotify.</p>
+      <label for="overlayLink">Персональная ссылка</label>
+      <div class="copy-field">
+        <input id="overlayLink" type="password" readonly spellcheck="false" autocomplete="off"/>
+        <button id="toggleLink" type="button" class="subtle-button" aria-label="Показать или скрыть ссылку">Показать</button>
+      </div>
+      <div class="controls">
+        <button id="copyLink" type="button" class="primary">Скопировать ссылку</button>
+        <button id="previewLink" type="button" class="secondary">Открыть живой виджет</button>
+      </div>
+      <div class="obs-guide">
+        <div class="obs-guide-label">Параметры OBS</div>
+        <div><strong>550 × 160 px</strong><span>Размер браузерного источника</span></div>
+        <div><strong>30 FPS</strong><span>Достаточно для анимации</span></div>
+      </div>
+      <p class="tip">Ссылка содержит ключ просмотра твоей музыки. Не публикуй её целиком на стриме или в открытом репозитории.</p>
+      <div id="linkStatus" class="status" hidden role="status" aria-live="polite"></div>
+    </section>
+
+    <section class="card" id="customize">
+      <div class="section-head">
+        <div><div class="kicker">ШАГ 2 · ОФОРМЛЕНИЕ</div><h2>Настройки виджета</h2></div>
+        <span class="tag">Изменения сразу в ссылке</span>
+      </div>
+      <div class="preview-stage">
+        <div class="preview-heading"><span>Предпросмотр</span><span class="preview-demo">ДЕМО</span></div>
+        <iframe id="demoPreview" src="./overlay.html?demo=1" title="Демонстрация музыкального оверлея" loading="lazy" referrerpolicy="no-referrer"></iframe>
+      </div>
+      <div class="options-grid">
+        <div class="field">
+          <label for="poll">Частота обновления</label>
+          <select id="poll">
+            <option value="3000">3 секунды (рекомендуется)</option>
+            <option value="5000">5 секунд</option>
+            <option value="10000">10 секунд</option>
+          </select>
+          <div class="help">Чем чаще запросы, тем выше нагрузка на Spotify API.</div>
+        </div>
+        <div class="field">
+          <label for="duration">Показывать трек</label>
+          <select id="duration">
+            <option value="0">Пока играет музыка</option>
+            <option value="5">5 секунд после смены</option>
+            <option value="8">8 секунд после смены</option>
+            <option value="15">15 секунд после смены</option>
+          </select>
+          <div class="help">Скрывает карточку автоматически, если выбран интервал.</div>
+        </div>
+      </div>
+      <div class="toggles">
+        <label class="toggle"><input id="showCover" type="checkbox" checked/><span><strong>Обложка трека</strong><small>Картинка слева и размытый фон</small></span></label>
+        <label class="toggle"><input id="animateText" type="checkbox" checked/><span><strong>Анимация смены</strong><small>Текст плавно перелистывается</small></span></label>
+      </div>
+      <p class="help" id="settingsHelp">Предпросмотр показывает демонстрационные песни. Для обновления параметров на стриме повторно скопируй ссылку в OBS.</p>
+    </section>
+
+    <section class="card" id="setup">
+      <div class="section-head">
+        <div><div class="kicker">ПОДКЛЮЧЕНИЕ</div><h2 id="setupTitle">Подключить Spotify</h2></div>
+        <span class="tag" id="setupTag">Один раз</span>
+      </div>
+      <p id="setupIntro">Используется твой Cloudflare Worker. Он хранит Spotify-токены на сервере, а OBS получает только ключ просмотра.</p>
+      <div id="friendWelcome" class="friend-welcome" hidden>
+        <strong>Тебя пригласили в Wither Spotify Widget!</strong>
+        <p>Проверь, что владелец добавил твой Spotify-аккаунт в список пользователей приложения. Затем нажми «Подключить Spotify». Никакого Cloudflare и секретов тебе настраивать не нужно.</p>
+      </div>
+      <div class="field">
+        <label for="workerUrl">Адрес Cloudflare Worker</label>
+        <input id="workerUrl" type="url" placeholder="https://имя.workers.dev" autocomplete="off" spellcheck="false"/>
+      </div>
+      <div class="field" id="pairingArea">
+        <label for="pairingKey">Ключ владельца (PAIRING_KEY)</label>
+        <input id="pairingKey" type="password" placeholder="Секрет из Cloudflare" autocomplete="off"/>
+      </div>
+      <div class="controls">
+        <button id="connectSpotify" type="button" class="primary">Подключить Spotify</button>
+        <button id="checkWorker" type="button" class="secondary">Проверить сервер</button>
+      </div>
+      <details>
+        <summary>Не подключено? Как получить Worker</summary>
+        <p>Серверная часть создаётся один раз владельцем. Пошаговая инструкция — <a href="https://github.com/WitherOffic/spotify-widget-pkce/blob/main/worker/README.md" target="_blank" rel="noopener noreferrer">в репозитории проекта</a>.</p>
+      </details>
+      <div id="setupStatus" class="status" hidden role="status" aria-live="polite"></div>
+    </section>
+
+    <section class="card" id="friendsCard" hidden>
+      <div class="section-head">
+        <div><div class="kicker">ДЛЯ ВЛАДЕЛЬЦА</div><h2>Пригласить друга</h2></div>
+        <span class="tag">Одноразовая ссылка</span>
+      </div>
+      <p>Создай приглашение, которое действует 48 часов. Друг подключит свой Spotify и получит отдельный OBS-оверлей. Главный ключ ему не нужен.</p>
+      <p class="tip">Перед приглашением добавь Spotify-аккаунт друга в <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer">User Management</a> своего приложения. В Development Mode число разрешённых пользователей ограничено Spotify.</p>
+      <div class="field">
+        <label for="adminPairingKey">Ключ владельца Cloudflare</label>
+        <input id="adminPairingKey" type="password" autocomplete="off" placeholder="PAIRING_KEY (не сохраняется на сайте)"/>
+      </div>
+      <div class="controls">
+        <button id="createInvite" type="button" class="secondary">Создать приглашение</button>
+      </div>
+      <div id="inviteResult" hidden>
+        <label for="inviteLink">Отправь ссылку другу в личных сообщениях</label>
+        <div class="copy-field">
+          <input id="inviteLink" type="password" readonly autocomplete="off" spellcheck="false"/>
+          <button id="copyInvite" type="button" class="subtle-button">Скопировать</button>
+        </div>
+      </div>
+      <div id="inviteStatus" class="status" hidden role="status" aria-live="polite"></div>
+    </section>
+
+    <section class="card actions-card" id="accountCard" hidden>
+      <div><h2>Управление доступом</h2><p>Старая ссылка перестанет работать после перевыпуска. Отключение удалит подключение с сервера.</p></div>
+      <div class="controls">
+        <button id="rotateLink" type="button" class="secondary">Перевыпустить OBS-ссылку</button>
+        <button id="disconnect" type="button" class="danger">Отключить Spotify</button>
+      </div>
+    </section>
+    <footer>
+      Wither Spotify Widget · GPLv3 · Не является официальным продуктом Spotify.
+      <span>Исходная идея и часть интерфейса основаны на <a href="https://github.com/nuttylmao/spotify-widget" target="_blank" rel="noopener noreferrer">Nutty Spotify Widget</a>.</span>
+    </footer>
+  </main>
+  <script type="module" src="./dashboard.js"></script>
 </body>
 </html>
