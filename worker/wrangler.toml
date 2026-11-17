@@ -1,0 +1,16 @@
+name = "wither-spotify-widget-api"
+main = "src/index.js"
+compatibility_date = "2026-11-01"
+workers_dev = true
+
+[vars]
+SITE_URL = "https://witheroffic.github.io/spotify-widget-pkce/index.html"
+SPOTIFY_CLIENT_ID = "REPLACE_WITH_YOUR_SPOTIFY_CLIENT_ID"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "wither-spotify-widget-db"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+
+# Never put TOKEN_ENC_KEY, PAIRING_KEY or Spotify refresh tokens here.
+# Store them as encrypted secrets in the Cloudflare Worker dashboard.
