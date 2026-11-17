@@ -10,7 +10,7 @@ SPOTIFY_CLIENT_ID = "REPLACE_WITH_YOUR_SPOTIFY_CLIENT_ID"
 [[d1_databases]]
 binding = "DB"
 database_name = "wither-spotify-widget-db"
-database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+database_id = "cbfd15e8-2349-40c5-823a-cbe12870e2de"
 
 # Never put TOKEN_ENC_KEY, PAIRING_KEY or Spotify refresh tokens here.
 # Store them as encrypted secrets in the Cloudflare Worker dashboard.
