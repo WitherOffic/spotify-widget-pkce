@@ -119,33 +119,6 @@ async function image(song){
     if(coverTask?.promise===task)coverTask=null;
   }
 }
-for(const element of imgs)element.src=url;
-  els.main.classList.add("has-artwork");
-  return true;
-}
-async function image(song){
-  if(!song?.id || activeTrack?.id!==song.id ||
-     els.main.classList.contains("has-artwork") ||
-     coverTask?.trackId===song.id || Date.now()<coverRetryAfter)return;
-  const generation=artworkGeneration;
-  const task=(async()=>{
-    if(await preloadCover(song.image,song.id,generation))return;
-    if(generation!==artworkGeneration || activeTrack?.id!==song.id)return;
-    // Public Spotify oEmbed in the browser is a fallback if the Worker was
-    // refused by Spotify or the catalog response lacked album.images.
-    const fallback=await publicThumbnail(song);
-    if(generation!==artworkGeneration || activeTrack?.id!==song.id)return;
-    if(await preloadCover(fallback,song.id,generation))return;
-    if(generation===artworkGeneration && activeTrack?.id===song.id) {
-      coverRetryAfter=Date.now()+60_000;
-      console.info("Spotify cover unavailable; neutral card will be shown.");
-    }
-  })();
-  coverTask={trackId:song.id,promise:task};
-  try{await task}finally{
-    if(coverTask?.promise===task)coverTask=null;
-  }
-}
 for(const element of imgs)element.addEventListener("error",()=>{
   const src=element.getAttribute("src");
   if(!src || !latestSong || activeTrack?.id!==latestSong.id)return;
