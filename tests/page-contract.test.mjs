@@ -34,7 +34,10 @@ test('dashboard offers secure OBS link, demo preview and invitation controls',()
   assert.match(page,/id="demoPreview" src="\.\/overlay\.html\?demo=1"/);
   assert.match(page,/id="friendWelcome"/);
   assert.match(page,/id="createInvite"/);
-  assert.match(page,/id="adminPairingKey" type="password"/);
+  assert.match(page,/id="adminLoginKey" type="password"/);
+  assert.match(page,/id="adminAccessArea"/);
+  assert.match(page,/id="revokeAdmin"/);
+  assert.doesNotMatch(page,/id="adminPairingKey"/);
   assert.match(page,/id="copyInvite"/);
   assert.match(page,/id="connectionBadge"/);
 });
@@ -52,4 +55,28 @@ test('D1 schema adds invites without altering existing overlays',()=>{
   assert.match(schema,/CREATE TABLE IF NOT EXISTS invites/);
   assert.match(schema,/used_at INTEGER/);
   assert.match(schema,/CREATE TABLE IF NOT EXISTS overlays/);
+  assert.match(schema,/CREATE TABLE IF NOT EXISTS admin_sessions/);
+  assert.match(schema,/revoked_at INTEGER/);
+});
+
+test('admin permission is scoped, server-validated and not shown to other connected accounts',()=>{
+  const js=html('../dashboard.js');
+  const worker=html('../worker/src/index.js');
+  assert.match(js,/const ADMIN_KEY="wither-spotify-admin-session"/);
+  assert.match(js,/adminSession:adminSession\.token/);
+  assert.match(js,/adminVerified/);
+  assert.match(js,/friendsArea\.hidden=!authorized/);
+  assert.match(js,/localStorage\.removeItem\(ADMIN_KEY\)/);
+  assert.doesNotMatch(js,/save\(ADMIN_KEY,\s*.*pairingKey\)/);
+  assert.match(worker,/const ADMIN_SESSION_MS = 90 \* 24 \* 60 \* 60 \* 1000/);
+  assert.match(worker,/\/api\/admin\/activate/);
+  assert.match(worker,/\/api\/admin\/revoke/);
+  assert.match(worker,/\/api\/admin\/status/);
+});
+
+test('dashboard uses local scripts only and restricts active page content',()=>{
+  const page=html('../index.html');
+  assert.match(page,/http-equiv="Content-Security-Policy"/);
+  assert.match(page,/script-src 'self'/);
+  assert.doesNotMatch(page,/script src="https:\/\//);
 });
