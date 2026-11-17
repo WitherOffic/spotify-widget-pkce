@@ -5,6 +5,7 @@
 import {progressAt,formatTime,parsePollMs,clamp} from './player-core.js';
 import {createTextTransition} from './src/track-animation.js';
 import {publicThumbnail} from './src/public-artwork.js';
+import {preferPublicCover} from './src/cover-priority.js';
 
 const params=new URLSearchParams(location.search);
 const els={
@@ -66,7 +67,7 @@ function clearArtwork(){
   for(const img of imgs) img.removeAttribute("src");
 }
 const usableCover=url=>/^https:\/\/[^\s]+$/i.test(url||"");
-async function preloadCover(url,trackId,generation) {
+async function probeCover(url,trackId,generation) {
   if(!usableCover(url) || brokenCoverUrls.has(url))return false;
   const candidate=new Image();
   const loaded=await new Promise(resolve=>{
@@ -74,7 +75,7 @@ async function preloadCover(url,trackId,generation) {
       candidate.onload=null;
       candidate.onerror=null;
       resolve(false);
-    },7000);
+    },4000);
     candidate.onload=()=>{clearTimeout(timeout);resolve(true)};
     candidate.onerror=()=>{clearTimeout(timeout);resolve(false)};
     candidate.src=url;
@@ -82,10 +83,43 @@ async function preloadCover(url,trackId,generation) {
   if(generation!==artworkGeneration || activeTrack?.id!==trackId)return false;
   if(!loaded){
     brokenCoverUrls.add(url);
-    console.info("Spotify artwork URL was not loadable in this browser.");
-    return false;
+    console.info("Artwork source timed out or could not load.");
   }
-  for(const element of imgs)element.src=url;
+  return loaded;
+}
+async function image(song){
+  if(!song?.id || activeTrack?.id!==song.id ||
+     els.main.classList.contains("has-artwork") ||
+     coverTask?.trackId===song.id || Date.now()<coverRetryAfter)return;
+  const generation=artworkGeneration;
+  const attempted=new Map();
+  // Deduplicate when oEmbed and the Worker supply the same CDN URL.
+  const probe=url=>{
+    if(!attempted.has(url))attempted.set(url,probeCover(url,song.id,generation));
+    return attempted.get(url);
+  };
+  const task=(async()=>{
+    const url=await preferPublicCover({
+      lookupPublic:()=>publicThumbnail(song),
+      backupUrl:song.image,
+      probe,
+      graceMs:1000,
+    });
+    if(generation!==artworkGeneration || activeTrack?.id!==song.id)return;
+    if(url){
+      for(const element of imgs)element.src=url;
+      els.main.classList.add("has-artwork");
+      return;
+    }
+    coverRetryAfter=Date.now()+30_000;
+    console.info("No usable Spotify cover; neutral card will be shown.");
+  })();
+  coverTask={trackId:song.id,promise:task};
+  try{await task}finally{
+    if(coverTask?.promise===task)coverTask=null;
+  }
+}
+for(const element of imgs)element.src=url;
   els.main.classList.add("has-artwork");
   return true;
 }
