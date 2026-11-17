@@ -1,6 +1,6 @@
 /*
  * Wither Spotify Widget — resilient album artwork controller.
- * Modified 2026-11-17. GPL-3.0-or-later; see LICENSE.
+ * Modified 2026-11-17. GNU GPL version 3; see LICENSE.
  */
 const COVER_RETRY_MS = 60000;
 const MAX_CACHE = 80;
