@@ -1,0 +1,26 @@
+
+/* Additional styling for read-only OBS page. Keep the same visual design. */
+#spotifyAttribution {
+  position: absolute;
+  right: 9px;
+  bottom: 2px;
+  z-index: 6;
+  font: 9px/1 sans-serif;
+  color: rgba(255,255,255,.65);
+  text-decoration: none;
+  pointer-events: auto;
+}
+#spotifyAttribution:hover { color: #fff; text-decoration: underline; }
+#overlayStatus {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  max-width: 90vw;
+  border-radius: 12px;
+  padding: 15px 18px;
+  background: #22252b;
+  color: #fff;
+  font: 14px/1.4 system-ui, sans-serif;
+}
+#overlayStatus[hidden] { display: none; }
