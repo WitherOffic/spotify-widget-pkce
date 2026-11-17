@@ -226,6 +226,9 @@ async function fetchOEmbedCover(item) {
 }
 async function lookupArtwork(item) {
   if (item?.is_local) return null;
+  // oEmbed returns a thumbnail without consuming Web API quota.
+  const publicCover = await fetchOEmbedCover(item);
+  if (publicCover) return publicCover;
   const albumId = spotifyId(item?.album);
   if (albumId) {
     const album = await fetchCatalog(`albums/${albumId}`);
@@ -239,7 +242,7 @@ async function lookupArtwork(item) {
     const url = imageUrlFrom(metadata);
     if (url) return url;
   }
-  return fetchOEmbedCover(item);
+  return null;
 }
 async function ensureArtwork(trackId, item) {
   const cached = artworkCache.get(trackId);
