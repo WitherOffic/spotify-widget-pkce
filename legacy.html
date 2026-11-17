@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Wither Spotify Widget — Temporary Direct Mode</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <!-- Wither Spotify Widget, modified 2026-11-17, GPLv3; see LICENSE. -->
+  <main id="mainContainer" aria-live="polite">
+    <div id="albumArtBox">
+      <img id="albumArt"  alt="Обложка" />
+      <img id="albumArtBack"  alt="" aria-hidden="true" />
+    </div>
+    <div id="songInfoBox">
+      <div id="songInfo">
+        <div id="IAmRunningOutOfNamesForTheseBoxes">
+          <div id="trackTextViewport">
+            <div id="trackText">
+              <div id="songLabel">Spotify</div>
+              <div id="artistLabel">Ожидаем подключение</div>
+            </div>
+          </div>
+          <div id="times">
+            <div id="progressTime">0:00</div>
+            <div id="timeRemaining">-0:00</div>
+          </div>
+          <div id="progressBg"><div id="progressBar"></div></div>
+        </div>
+      </div>
+      <div id="backgroundArt">
+        <img id="backgroundImage"  alt="" aria-hidden="true" />
+        <img id="backgroundImageBack"  alt="" aria-hidden="true" />
+      </div>
+    </div>
+  </main>
+
+  <!-- Only visible before connecting or on fatal errors / ?settings=1. -->
+  <section id="statusContainer" role="status" aria-live="polite" hidden>
+    <div class="status-title">Wither Spotify Widget</div>
+    <p id="statusMessage">Подключи свой Spotify Developer Client ID.</p>
+    <label for="clientIdInput">Client ID (публичный, не Client Secret)</label>
+    <input id="clientIdInput" type="text" spellcheck="false" autocomplete="off" maxlength="100" placeholder="Client ID из Spotify Dashboard" />
+    <div class="status-buttons">
+      <button id="connectButton" type="button">Подключить Spotify</button>
+      <button id="disconnectButton" type="button" class="secondary">Сбросить авторизацию</button>
+    </div>
+    <p class="hint">Если вход в Spotify заблокирован внутри OBS: войди в обычном браузере, открой <b>?settings=1</b>, скопируй подключение. Затем импортируй его здесь через «Взаимодействовать».</p>
+    <div class="status-buttons">
+      <button id="exportButton" type="button" class="secondary">Показать подключение для переноса</button>
+      <button id="importButton" type="button" class="secondary">Импортировать подключение</button>
+    </div>
+    <textarea id="transferInput" placeholder="Вставь JSON подключения из обычного браузера. Никому не отправляй его и не показывай на стриме." rows="2" spellcheck="false"></textarea>
+    <p class="hint">Это секретный refresh token. Не добавляй его в URL OBS или публичные настройки.</p>
+    <p class="hint">Redirect URI для регистрации в Spotify:</p>
+    <code id="redirectUriText"></code>
+    <p class="hint">Настройка делается через «Взаимодействовать» в источнике OBS.</p>
+  </section>
+  <script type="module" src="./script.js"></script>
+</body>
+</html>
