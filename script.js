@@ -79,6 +79,8 @@ let failureCount = 0;
 let wasPlaying = false;
 let currentVisible = false;
 let displayedArtwork = null;
+let artworkLoadId = 0;
+const brokenArtwork = new Set();
 const artworkCache = new Map();
 const ARTWORK_RETRY_MS = 60000;
 let rateLimitedUntil = 0;
@@ -105,6 +107,7 @@ function hideTrack() {
   lastTrackId = null;
   wasPlaying = false;
   displayedArtwork = null;
+  clearArtwork();
   setVisibility(false);
 }
 function showStatus(message) {
@@ -124,36 +127,49 @@ function updateText(el, value) {
     el.classList.remove('text-fade');
   }, 200);
 }
-function updateImage(front, back, url) {
-  const target = /^https:\/\//i.test(url || '') ? url : './images/placeholder.svg';
-  if (front.dataset.currentUrl === target) return;
-  front.dataset.currentUrl = target;
-  front.classList.add('text-fade');
-  clearTimeout(front._swapTimeout);
-  clearTimeout(front._backTimeout);
-  front._swapTimeout = setTimeout(() => {
-    front.src = target;
-    front.classList.remove('text-fade');
-  }, 250);
-  front._backTimeout = setTimeout(() => { back.src = target; }, 850);
+// Album art is optional: never show a broken image or the old colored SVG.
+// Verify image URLs before attaching them to the visible DOM.
+function clearArtwork() {
+  artworkLoadId++;
+  displayedArtwork = null;
+  els.main.classList.remove('has-artwork');
+  for (const img of [els.art, els.artBack, els.bg, els.bgBack]) {
+    img.removeAttribute('src');
+  }
 }
-// Spotify can return track data without album.images. Lookup artwork by track/album
-// ID using the supported individual catalog endpoints, only once per song.
+async function showArtwork(url, trackId, item) {
+  if (!/^https:\/\/[^\s]+$/i.test(url || '') || brokenArtwork.has(url)) return false;
+  if (displayedArtwork === url && els.main.classList.contains('has-artwork')) return true;
+  const requestId = ++artworkLoadId;
+  const ok = await new Promise(resolve => {
+    const candidate = new Image();
+    const timer = setTimeout(() => { candidate.onload = null; candidate.onerror = null; resolve(false); }, 8000);
+    candidate.onload = () => { clearTimeout(timer); resolve(true); };
+    candidate.onerror = () => { clearTimeout(timer); resolve(false); };
+    candidate.src = url;
+  });
+  if (!currentTrack || currentTrack.id !== trackId || requestId !== artworkLoadId) return false;
+  if (!ok) {
+    brokenArtwork.add(url);
+    clearArtwork();
+    console.warn('Album artwork unavailable; keeping a neutral background.');
+    // A different catalog source may have an alternative thumbnail.
+    if (item) void ensureArtwork(trackId, item);
+    return false;
+  }
+  displayedArtwork = url;
+  for (const img of [els.art, els.artBack, els.bg, els.bgBack]) img.src = url;
+  els.main.classList.add('has-artwork');
+  return true;
+}
 function imageUrlFrom(item) {
   for (const images of [item?.album?.images, item?.images, item?.show?.images]) {
-    if (Array.isArray(images)) {
-      const image = images.find(entry => /^https:\/\//i.test(entry?.url || ''));
-      if (image) return image.url;
+    if (!Array.isArray(images)) continue;
+    for (const image of images) {
+      if (/^https:\/\/[^\s]+$/i.test(image?.url || '') && !brokenArtwork.has(image.url)) return image.url;
     }
   }
   return null;
-}
-function displayArtwork(url) {
-  const target = /^https:\/\//i.test(url || '') ? url : null;
-  if (target === displayedArtwork) return;
-  displayedArtwork = target;
-  updateImage(els.art, els.artBack, target);
-  updateImage(els.bg, els.bgBack, target);
 }
 function spotifyId(item) {
   const id = item?.id || (typeof item?.uri === 'string' ? item.uri.split(':')[2] : '');
@@ -181,6 +197,23 @@ async function fetchCatalog(path) {
   }
   return response.json();
 }
+async function fetchOEmbedCover(item) {
+  // Public Spotify oEmbed occasionally supplies a thumbnail when Web API lacks images.
+  // This request is optional; some browsers block it through CORS.
+  const kind = item?.type === 'episode' ? 'episode' : 'track';
+  const id = spotifyId(item);
+  if (!id) return null;
+  try {
+    const url = new URL('https://open.spotify.com/oembed');
+    url.searchParams.set('url', `https://open.spotify.com/${kind}/${id}`);
+    const response = await fetch(url, { cache: 'force-cache' });
+    if (!response.ok) return null;
+    const data = await response.json();
+    return /^https:\/\//i.test(data.thumbnail_url || '') && !brokenArtwork.has(data.thumbnail_url) ? data.thumbnail_url : null;
+  } catch {
+    return null;
+  }
+}
 async function lookupArtwork(item) {
   if (item?.is_local) return null;
   const albumId = spotifyId(item?.album);
@@ -190,23 +223,29 @@ async function lookupArtwork(item) {
     if (url) return url;
   }
   const id = spotifyId(item);
-  if (!id) return null;
-  const kind = item?.type === 'episode' ? 'episodes' : 'tracks';
-  const metadata = await fetchCatalog(`${kind}/${id}`);
-  return imageUrlFrom(metadata);
+  if (id) {
+    const kind = item?.type === 'episode' ? 'episodes' : 'tracks';
+    const metadata = await fetchCatalog(`${kind}/${id}`);
+    const url = imageUrlFrom(metadata);
+    if (url) return url;
+  }
+  return fetchOEmbedCover(item);
 }
 async function ensureArtwork(trackId, item) {
   const cached = artworkCache.get(trackId);
-  if (cached && (cached.pending || cached.url || Date.now() - cached.checkedAt < ARTWORK_RETRY_MS)) {
-    if (cached.url && currentTrack?.id === trackId) displayArtwork(cached.url);
+  if (cached && (cached.pending || (cached.url && !brokenArtwork.has(cached.url)) ||
+       Date.now() - cached.checkedAt < ARTWORK_RETRY_MS)) {
+    if (cached.url && !brokenArtwork.has(cached.url) && currentTrack?.id === trackId) {
+      void showArtwork(cached.url, trackId, item);
+    }
     return;
   }
   artworkCache.set(trackId, { pending: true, url: null, checkedAt: Date.now() });
   try {
     const url = await lookupArtwork(item);
     artworkCache.set(trackId, { pending: false, url, checkedAt: Date.now() });
-    if (url && currentTrack?.id === trackId) displayArtwork(url);
-    if (!url) console.warn('Spotify has not provided album artwork for this song.');
+    if (url && currentTrack?.id === trackId) void showArtwork(url, trackId, null);
+    if (!url) console.info('No album artwork available for this song.');
   } catch (error) {
     artworkCache.set(trackId, { pending: false, url: null, checkedAt: Date.now() });
     console.warn('Spotify artwork lookup error:', error.message);
@@ -233,11 +272,14 @@ function renderPlaying(data, responseRoundTripMs = 0) {
     updateText(els.song, track.title);
     updateText(els.artist, track.artist);
     lastTrackId = track.id;
-    displayedArtwork = ''; // Make even a missing image reset the previous cover.
+    clearArtwork(); // Never carry over a previous song's cover.
   }
   const artwork = track.image || artworkCache.get(track.id)?.url || null;
-  displayArtwork(artwork);
-  if (!artwork) void ensureArtwork(track.id, data.item);
+  if (artwork && !brokenArtwork.has(artwork)) {
+    if (displayedArtwork !== artwork) void showArtwork(artwork, track.id, data.item);
+  } else if (!artwork || brokenArtwork.has(artwork)) {
+    void ensureArtwork(track.id, data.item);
+  }
   drawProgress();
   if (newTrack || !wasPlaying) revealForTrack();
   wasPlaying = true;
@@ -483,20 +525,12 @@ async function start() {
   setVisibility(false);
   els.main.style.opacity = '0';
   ticker = setInterval(drawProgress, 250);
-  for (const img of [els.art, els.artBack, els.bg, els.bgBack]) {
-    img.addEventListener('error', () => {
-      const placeholder = new URL('./images/placeholder.svg', location.href).href;
-      if (img.src !== placeholder) {
-        console.warn('Spotify artwork image could not be loaded:', img.src);
-        img.src = placeholder;
-      }
-    });
-  }
+  clearArtwork(); // Empty, neutral state until a real cover has loaded.
 
   if (params.get('demo') === '1') {
     renderPlaying({ is_playing: true, progress_ms: 29000, currently_playing_type: 'track', item: {
-      uri: 'spotify:track:demo', type: 'track', name: 'планета', duration_ms: 201000,
-      artists: [{ name: 'Амора' }], album: { images: [] },
+      uri: 'spotify:track:demo', type: 'track', name: 'Демонстрационный трек', duration_ms: 201000,
+      artists: [{ name: 'Тестовый исполнитель' }], album: { images: [] },
     }});
     hideStatus();
     return;
