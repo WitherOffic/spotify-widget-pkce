@@ -27,3 +27,29 @@ test('secrets are not placed in Cloudflare worker config',()=>{
   assert.doesNotMatch(config,/^TOKEN_ENC_KEY\s*=/m);
   assert.doesNotMatch(config,/^PAIRING_KEY\s*=/m);
 });
+
+test('dashboard offers secure OBS link, demo preview and invitation controls',()=>{
+  const page=html('../index.html');
+  assert.match(page,/id="overlayLink" type="password"/);
+  assert.match(page,/id="demoPreview" src="\.\/overlay\.html\?demo=1"/);
+  assert.match(page,/id="friendWelcome"/);
+  assert.match(page,/id="createInvite"/);
+  assert.match(page,/id="adminPairingKey" type="password"/);
+  assert.match(page,/id="copyInvite"/);
+  assert.match(page,/id="connectionBadge"/);
+});
+
+test('dashboard strips invitations from address bar and does not persist invite codes',()=>{
+  const js=html('../dashboard.js');
+  assert.match(js,/history\.replaceState/);
+  assert.match(js,/activeInvite=invite/);
+  assert.match(js,/\.hash=new URLSearchParams/);
+  assert.doesNotMatch(js,/save\(ACCOUNT_KEY,activeInvite\)/);
+});
+
+test('D1 schema adds invites without altering existing overlays',()=>{
+  const schema=html('../worker/schema.sql');
+  assert.match(schema,/CREATE TABLE IF NOT EXISTS invites/);
+  assert.match(schema,/used_at INTEGER/);
+  assert.match(schema,/CREATE TABLE IF NOT EXISTS overlays/);
+});
