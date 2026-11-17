@@ -5,7 +5,7 @@ workers_dev = true
 
 [vars]
 SITE_URL = "https://witheroffic.github.io/spotify-widget-pkce/index.html"
-SPOTIFY_CLIENT_ID = "REPLACE_WITH_YOUR_SPOTIFY_CLIENT_ID"
+SPOTIFY_CLIENT_ID = "d19abf08ca1f42f38262ea21b490c75f"
 
 [[d1_databases]]
 binding = "DB"
