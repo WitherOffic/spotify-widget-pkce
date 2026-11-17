@@ -18,7 +18,8 @@ export function publicSpotifyId(song) {
   return null;
 }
 const cache=new Map();
-export async function publicThumbnail(song, fetchFn=fetch, now=Date.now) {
+// Call fetch through its global receiver to avoid Illegal invocation in OBS's browser.
+export async function publicThumbnail(song, fetchFn=(...args)=>globalThis.fetch(...args), now=Date.now) {
   const entity=publicSpotifyId(song);
   if(!entity)return null;
   const key=entity.kind+"/"+entity.id;
@@ -28,7 +29,7 @@ export async function publicThumbnail(song, fetchFn=fetch, now=Date.now) {
   endpoint.searchParams.set("url","https://open.spotify.com/"+key);
   let art=null;
   try {
-    const response=await fetchFn(endpoint.toString(),{cache:"no-store",signal:AbortSignal.timeout(5000)});
+    const response=await fetchFn(endpoint.toString(),{cache:"no-store",signal:AbortSignal.timeout(3500)});
     if(response.ok) {
       const data=await response.json();
       if(/^https:\/\/[^\s]+$/i.test(data.thumbnail_url||""))art=data.thumbnail_url;
