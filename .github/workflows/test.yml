@@ -20,7 +20,4 @@ jobs:
       - name: Run tests
         run: npm test
       - name: Check JavaScript syntax
-        run: |
-          node --check script.js
-          node --check player-core.js
-          node --check src/track-animation.js
+        run: npm run check
