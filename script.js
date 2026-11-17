@@ -1,26 +1,19 @@
 /*
- * Spotify Widget — PKCE Edition (2026)
- * Based on nuttylmao/spotify-widget (GPL-3.0).
- * No SMTC, client secret, service worker, proxy, or resident companion app.
- * Needs static HTTPS hosting + a Spotify Developer application owned by the user.
+ * Wither Spotify Widget — OBS browser overlay.
+ * Modified 2026-11-17. GNU GPL version 3; see LICENSE.
+ * Static HTML/CSS/JS and Spotify Web API, no resident app required.
  */
 import {
   DEFAULT_POLL_MS, parsePollMs, retryAfterMs, normalizeTrack,
   progressAt, formatTime, clamp, getOAuthErrorMessage,
 } from './player-core.js';
+import { createTextTransition } from './src/track-animation.js';
+import { createArtworkController } from './src/artwork.js';
+import { SpotifyAuth } from './src/spotify-auth.js';
 
 const params = new URLSearchParams(window.location.search);
-const KEYS = {
-  clientId: 'nutty-pkce-v1-client-id',
-  tokens: 'nutty-pkce-v1-tokens',
-  verifier: 'nutty-pkce-v1-verifier',
-  state: 'nutty-pkce-v1-state',
-  options: 'nutty-pkce-v1-options',
-};
-const API_CURRENT = 'https://api.spotify.com/v1/me/player/currently-playing';
-const TOKEN_ENDPOINT = 'https://accounts.spotify.com/api/token';
-const OAUTH_ENDPOINT = 'https://accounts.spotify.com/authorize';
-const SCOPE = 'user-read-currently-playing';
+const OPTIONS_KEY='nutty-pkce-v1-options'; // Preserve existing browser configuration.
+const API_CURRENT='https://api.spotify.com/v1/me/player/currently-playing';
 const defaultRedirect = new URL('./index.html', window.location.href);
 defaultRedirect.search = '';
 defaultRedirect.hash = '';
@@ -49,12 +42,13 @@ const els = {
   elapsed: document.getElementById('progressTime'),
   remaining: document.getElementById('timeRemaining'),
 };
+const auth = new SpotifyAuth({redirectUri});
 const configId = params.get('client_id')?.trim() || '';
-if (configId) localStorage.setItem(KEYS.clientId, configId);
-let clientId = configId || localStorage.getItem(KEYS.clientId) || '';
+if (/^[a-zA-Z0-9]{16,64}$/.test(configId)) auth.setClientId(configId);
+let clientId = auth.clientId;
 // Preserve options across the OAuth redirect, which returns only ?code=...&state=....
 let storedOptions = {};
-try { storedOptions = JSON.parse(localStorage.getItem(KEYS.options) || '{}') || {}; }
+try { storedOptions = JSON.parse(localStorage.getItem(OPTIONS_KEY) || '{}') || {}; }
 catch { storedOptions = {}; }
 const isOAuthCallback = params.has('code') || params.has('error');
 const options = isOAuthCallback ? storedOptions : {
@@ -63,13 +57,11 @@ const options = isOAuthCallback ? storedOptions : {
   hideAlbumArt: params.has('hideAlbumArt'),
   settings: params.get('settings') === '1',
 };
-if (!isOAuthCallback && params.get('demo') !== '1') localStorage.setItem(KEYS.options, JSON.stringify(options));
+if (!isOAuthCallback && params.get('demo') !== '1') localStorage.setItem(OPTIONS_KEY, JSON.stringify(options));
 const pollMs = parsePollMs(options.poll);
 const visibilityDuration = clamp(Number(options.duration) || 0, 0, 3600) * 1000;
 const hideAlbumArt = !!options.hideAlbumArt;
 const debug = !!options.settings;
-let tokens = safeReadTokens();
-let refreshPromise = null;
 let active = false;
 let pollTimer = null;
 let visibilityTimer = null;
@@ -80,18 +72,23 @@ let trackSampledAt = 0;
 let failureCount = 0;
 let wasPlaying = false;
 let currentVisible = false;
-let displayedArtwork = null;
-let artworkLoadId = 0;
-let pendingArtwork = null;
-let currentItem = null;
-const brokenArtwork = new Set();
-const artworkCache = new Map();
-const ARTWORK_RETRY_MS = 60000;
 let rateLimitedUntil = 0;
+function noteRateLimit(response) {
+  const wait = retryAfterMs(response.headers.get('Retry-After')) ?? 60000;
+  rateLimitedUntil = Math.max(rateLimitedUntil,Date.now()+Math.max(1000,wait));
+  return wait;
+}
+const artworkController = createArtworkController({
+  container: els.main,
+  images: [els.art, els.artBack, els.bg, els.bgBack],
+  request: url => authorizedFetch(url),
+  isRateLimited: () => Date.now() < rateLimitedUntil,
+  noteRateLimit,
+});
 // Visual transitions do not affect the playback clock or API polling.
 const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 const animatedText = !reducedMotion && !params.has('noAnimation');
-const runningTextAnimations = [];
+const textTransition = createTextTransition(els.trackViewport, els.song, els.artist, { enabled: animatedText });
 
 // Display helpers.
 function setVisibility(visible) {
@@ -111,13 +108,11 @@ function revealForTrack() {
 }
 function hideTrack() {
   clearVisibilityTimer();
-  cancelTrackTextAnimations();
+  textTransition.cancel();
   currentTrack = null;
   lastTrackId = null;
   wasPlaying = false;
-  displayedArtwork = null;
-  currentItem = null;
-  clearArtwork();
+  artworkController.clear();
   setVisibility(false);
 }
 function showStatus(message) {
@@ -127,196 +122,6 @@ function showStatus(message) {
 }
 function hideStatus() {
   if (!debug) els.panel.hidden = true;
-}
-// The outgoing text slides left while the incoming song enters from the right.
-// Progress and timestamps are independent from these animations.
-function cancelTrackTextAnimations() {
-  for (const animation of runningTextAnimations.splice(0)) {
-    try { animation.cancel(); } catch {}
-  }
-  for (const ghost of els.trackViewport.querySelectorAll('.track-text-ghost')) ghost.remove();
-}
-function makeGhost(title, artist) {
-  const ghost = document.createElement('div');
-  ghost.className = 'track-text-ghost';
-  const oldSong = document.createElement('div');
-  oldSong.className = 'track-text-ghost-title';
-  oldSong.textContent = title;
-  const oldArtist = document.createElement('div');
-  oldArtist.className = 'track-text-ghost-artist';
-  oldArtist.textContent = artist;
-  ghost.append(oldSong, oldArtist);
-  return ghost;
-}
-function transitionTrackText(title, artist, hadPreviousTrack) {
-  const previousTitle = els.song.textContent;
-  const previousArtist = els.artist.textContent;
-  cancelTrackTextAnimations();
-
-  // Update the real text immediately; the animation only affects presentation.
-  els.song.textContent = title;
-  els.artist.textContent = artist;
-  if (!animatedText || !els.song.animate || !els.artist.animate) return;
-
-  if (hadPreviousTrack && (previousTitle !== title || previousArtist !== artist)) {
-    const ghost = makeGhost(previousTitle, previousArtist);
-    els.trackViewport.appendChild(ghost);
-    const outgoing = ghost.animate([
-      { opacity: 1, transform: 'translate3d(0,0,0)', filter: 'blur(0px)' },
-      { opacity: 0, transform: 'translate3d(-42px,0,0)', filter: 'blur(4px)' },
-    ], { duration: 340, easing: 'cubic-bezier(.55,.03,.83,.45)', fill: 'both' });
-    runningTextAnimations.push(outgoing);
-    void outgoing.finished.then(() => ghost.remove(), () => ghost.remove());
-  }
-
-  const incomingFrames = [
-    { opacity: 0, transform: 'translate3d(42px,0,0)', filter: 'blur(4px)' },
-    { opacity: 1, transform: 'translate3d(0,0,0)', filter: 'blur(0px)' },
-  ];
-  const songAnimation = els.song.animate(incomingFrames, {
-    duration: 520, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'both',
-  });
-  const artistAnimation = els.artist.animate(incomingFrames, {
-    duration: 550, delay: 70, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'both',
-  });
-  runningTextAnimations.push(songAnimation, artistAnimation);
-  void artistAnimation.finished.then(() => {
-    if (runningTextAnimations.includes(artistAnimation)) cancelTrackTextAnimations();
-  }, () => {});
-}
-// Album art is optional: never show a broken image or the old colored SVG.
-// Verify image URLs before attaching them to the visible DOM.
-function clearArtwork() {
-  artworkLoadId++;
-  pendingArtwork = null;
-  displayedArtwork = null;
-  els.main.classList.remove('has-artwork');
-  for (const img of [els.art, els.artBack, els.bg, els.bgBack]) {
-    img.removeAttribute('src');
-  }
-}
-async function showArtwork(url, trackId, item) {
-  if (!/^https:\/\/[^\s]+$/i.test(url || '') || brokenArtwork.has(url)) return false;
-  if (displayedArtwork === url && els.main.classList.contains('has-artwork')) return true;
-  if (pendingArtwork?.url === url && pendingArtwork.trackId === trackId) {
-    return pendingArtwork.promise;
-  }
-  const requestId = ++artworkLoadId;
-  const preloader = new Promise(resolve => {
-    const candidate = new Image();
-    const timer = setTimeout(() => { candidate.onload = null; candidate.onerror = null; resolve(false); }, 8000);
-    candidate.onload = () => { clearTimeout(timer); resolve(true); };
-    candidate.onerror = () => { clearTimeout(timer); resolve(false); };
-    candidate.src = url;
-  });
-  pendingArtwork = { url, trackId, promise: preloader };
-  const ok = await preloader;
-  if (pendingArtwork?.promise === preloader) pendingArtwork = null;
-  if (!currentTrack || currentTrack.id !== trackId || requestId !== artworkLoadId) return false;
-  if (!ok) {
-    brokenArtwork.add(url);
-    clearArtwork();
-    console.warn('Album artwork unavailable; keeping a neutral background.');
-    // A different catalog source may have an alternative thumbnail.
-    if (item) void ensureArtwork(trackId, item);
-    return false;
-  }
-  displayedArtwork = url;
-  for (const img of [els.art, els.artBack, els.bg, els.bgBack]) img.src = url;
-  els.main.classList.add('has-artwork');
-  return true;
-}
-function imageUrlFrom(item) {
-  for (const images of [item?.album?.images, item?.images, item?.show?.images]) {
-    if (!Array.isArray(images)) continue;
-    for (const image of images) {
-      if (/^https:\/\/[^\s]+$/i.test(image?.url || '') && !brokenArtwork.has(image.url)) return image.url;
-    }
-  }
-  return null;
-}
-function spotifyId(item) {
-  const id = item?.id || (typeof item?.uri === 'string' ? item.uri.split(':')[2] : '');
-  return /^[a-zA-Z0-9]{22}$/.test(id || '') ? id : null;
-}
-function noteRateLimit(response) {
-  const interval = retryAfterMs(response.headers.get('Retry-After')) ?? 60000;
-  rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + Math.max(1000, interval));
-  return interval;
-}
-async function fetchCatalog(path) {
-  if (Date.now() < rateLimitedUntil) return null;
-  const request = token => fetch(`https://api.spotify.com/v1/${path}`, {
-    headers: { Authorization: `Bearer ${token}` }, cache: 'no-store',
-  });
-  let response = await request(await accessToken());
-  if (response.status === 401) response = await request(await accessToken(true));
-  if (response.status === 429) {
-    noteRateLimit(response);
-    return null;
-  }
-  if (!response.ok) {
-    console.warn(`Spotify artwork lookup failed: ${path.split('/')[0]}, HTTP ${response.status}`);
-    return null;
-  }
-  return response.json();
-}
-async function fetchOEmbedCover(item) {
-  // Public Spotify oEmbed occasionally supplies a thumbnail when Web API lacks images.
-  // This request is optional; some browsers block it through CORS.
-  const kind = item?.type === 'episode' ? 'episode' : 'track';
-  const id = spotifyId(item);
-  if (!id) return null;
-  try {
-    const url = new URL('https://open.spotify.com/oembed');
-    url.searchParams.set('url', `https://open.spotify.com/${kind}/${id}`);
-    const response = await fetch(url, { cache: 'force-cache' });
-    if (!response.ok) return null;
-    const data = await response.json();
-    return /^https:\/\//i.test(data.thumbnail_url || '') && !brokenArtwork.has(data.thumbnail_url) ? data.thumbnail_url : null;
-  } catch {
-    return null;
-  }
-}
-async function lookupArtwork(item) {
-  if (item?.is_local) return null;
-  // oEmbed returns a thumbnail without consuming Web API quota.
-  const publicCover = await fetchOEmbedCover(item);
-  if (publicCover) return publicCover;
-  const albumId = spotifyId(item?.album);
-  if (albumId) {
-    const album = await fetchCatalog(`albums/${albumId}`);
-    const url = imageUrlFrom(album);
-    if (url) return url;
-  }
-  const id = spotifyId(item);
-  if (id) {
-    const kind = item?.type === 'episode' ? 'episodes' : 'tracks';
-    const metadata = await fetchCatalog(`${kind}/${id}`);
-    const url = imageUrlFrom(metadata);
-    if (url) return url;
-  }
-  return null;
-}
-async function ensureArtwork(trackId, item) {
-  const cached = artworkCache.get(trackId);
-  if (cached?.pending) return;
-  if (cached?.url && !brokenArtwork.has(cached.url)) {
-    if (currentTrack?.id === trackId) void showArtwork(cached.url, trackId, item);
-    return;
-  }
-  if (cached && !cached.url && Date.now() - cached.checkedAt < ARTWORK_RETRY_MS) return;
-  artworkCache.set(trackId, { pending: true, url: null, checkedAt: Date.now() });
-  try {
-    const url = await lookupArtwork(item);
-    artworkCache.set(trackId, { pending: false, url, checkedAt: Date.now() });
-    if (url && currentTrack?.id === trackId) void showArtwork(url, trackId, null);
-    if (!url) console.info('No album artwork available for this song.');
-  } catch (error) {
-    artworkCache.set(trackId, { pending: false, url: null, checkedAt: Date.now() });
-    console.warn('Spotify artwork lookup error:', error.message);
-  }
-  if (artworkCache.size > 80) artworkCache.delete(artworkCache.keys().next().value);
 }
 function drawProgress() {
   if (!currentTrack) return;
@@ -331,151 +136,33 @@ function renderPlaying(data, responseRoundTripMs = 0) {
   if (!track) { hideTrack(); return; }
   const newTrack = track.id !== lastTrackId;
   currentTrack = track;
-  currentItem = data.item;
   // Resynchronize on every API response, correcting drift and seeking.
   // Half the measured round trip approximates the age of the returned snapshot.
   trackSampledAt = performance.now() - Math.min(Math.max(responseRoundTripMs / 2, 0), 750);
   if (newTrack) {
-    transitionTrackText(track.title, track.artist, Boolean(lastTrackId));
+    textTransition.animate(track.title, track.artist, Boolean(lastTrackId));
     lastTrackId = track.id;
-    clearArtwork(); // Never carry over a previous song's cover.
+    artworkController.clear(); // Never carry over a previous song's cover.
   }
-  const artwork = track.image || artworkCache.get(track.id)?.url || null;
-  if (artwork && !brokenArtwork.has(artwork)) {
-    if (displayedArtwork !== artwork) void showArtwork(artwork, track.id, data.item);
-  } else if (!artwork || brokenArtwork.has(artwork)) {
-    void ensureArtwork(track.id, data.item);
-  }
+  void artworkController.display(track.id, data.item, track.image);
   drawProgress();
   if (newTrack || !wasPlaying) revealForTrack();
   wasPlaying = true;
 }
-function safeReadTokens() {
-  try { return JSON.parse(localStorage.getItem(KEYS.tokens) || 'null'); }
-  catch { return null; }
-}
-function saveTokens(incoming) {
-  if (!incoming?.access_token || !Number.isFinite(Number(incoming.expires_in))) {
-    throw new Error('Spotify прислал некорректный ответ при обновлении токена.');
-  }
-  const refresh = incoming.refresh_token || tokens?.refresh_token;
-  if (!refresh) throw new Error('В ответе Spotify отсутствует refresh_token. Повтори авторизацию.');
-  tokens = {
-    access_token: incoming.access_token,
-    refresh_token: refresh,
-    expires_at: Date.now() + Number(incoming.expires_in) * 1000,
-  };
-  localStorage.setItem(KEYS.tokens, JSON.stringify(tokens));
-}
-function discardTokens() {
-  tokens = null;
-  localStorage.removeItem(KEYS.tokens);
-}
-async function requestToken(body) {
-  const response = await fetch(TOKEN_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(body),
-    cache: 'no-store',
-  });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const reason = result.error_description || result.error || response.statusText;
-    const error = new Error(`Spotify OAuth (${response.status}): ${reason}`);
-    error.code = result.error;
-    throw error;
-  }
-  return result;
-}
-function randomBase64Url(bytes = 32) {
-  const values = crypto.getRandomValues(new Uint8Array(bytes));
-  return btoa(String.fromCharCode(...values))
-    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-}
-async function pkceChallenge(verifier) {
-  const bytes = new TextEncoder().encode(verifier);
-  const hash = await crypto.subtle.digest('SHA-256', bytes);
-  return btoa(String.fromCharCode(...new Uint8Array(hash)))
-    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-}
 async function connectSpotify() {
   clientId = els.clientInput.value.trim();
-  if (!/^[a-zA-Z0-9]{16,64}$/.test(clientId)) {
-    showStatus('Вставь корректный Spotify Client ID из Developer Dashboard (не Client Secret).');
-    return;
-  }
-  if (!window.isSecureContext || !crypto?.subtle) {
-    showStatus('OAuth PKCE требует HTTPS. Опубликуй файлы через GitHub Pages/другой HTTPS-хостинг. file:// не подходит.');
-    return;
-  }
-  localStorage.setItem(KEYS.clientId, clientId);
-  const verifier = randomBase64Url(64);
-  const state = randomBase64Url(32);
-  sessionStorage.setItem(KEYS.verifier, verifier);
-  sessionStorage.setItem(KEYS.state, state);
-  const challenge = await pkceChallenge(verifier);
-  const url = new URL(OAUTH_ENDPOINT);
-  url.search = new URLSearchParams({
-    response_type: 'code', client_id: clientId,
-    scope: SCOPE, redirect_uri: redirectUri,
-    state, code_challenge_method: 'S256', code_challenge: challenge,
-  }).toString();
-  window.location.assign(url.toString()); // same tab: required by OBS Interact
+  return auth.startConnect(clientId);
 }
 async function processOAuthCallback() {
-  if (!params.has('code') && !params.has('error')) return false;
-  const expectedState = sessionStorage.getItem(KEYS.state);
-  const codeVerifier = sessionStorage.getItem(KEYS.verifier);
-  const receivedState = params.get('state');
-  // Clear sensitive authorization code out of address bar/history promptly.
-  history.replaceState(null, '', redirectUri);
-  sessionStorage.removeItem(KEYS.state);
-  sessionStorage.removeItem(KEYS.verifier);
-  if (!receivedState || !expectedState || receivedState !== expectedState || !codeVerifier) {
-    throw new Error('OAuth state/PKCE не совпал. Повтори подключение в том же источнике OBS.');
-  }
-  if (params.has('error')) throw new Error(`Spotify отказал в доступе: ${params.get('error')}`);
-  if (!clientId) throw new Error('Client ID отсутствует после Spotify OAuth. Повтори подключение.');
-  const answer = await requestToken({
-    grant_type: 'authorization_code', code: params.get('code'),
-    redirect_uri: redirectUri, client_id: clientId, code_verifier: codeVerifier,
-  });
-  saveTokens(answer);
-  return true;
+  const connected=await auth.completeRedirect(params);
+  clientId=auth.clientId;
+  return connected;
 }
-async function refreshAccessToken() {
-  if (!tokens?.refresh_token) throw new Error('Нет refresh token; нужно подключить Spotify заново.');
-  if (refreshPromise) return refreshPromise;
-  refreshPromise = (async () => {
-    try {
-      const answer = await requestToken({
-        grant_type: 'refresh_token', refresh_token: tokens.refresh_token,
-        client_id: clientId,
-      });
-      saveTokens(answer); // supports rotating refresh tokens
-      return tokens.access_token;
-    } catch (error) {
-      if (error.code === 'invalid_grant' || error.code === 'invalid_client') discardTokens();
-      throw error;
-    } finally { refreshPromise = null; }
-  })();
-  return refreshPromise;
-}
-async function accessToken(forceRefresh = false) {
-  if (!clientId) throw new Error('Client ID не задан.');
-  if (!forceRefresh && tokens?.access_token && tokens.expires_at - Date.now() > 90000) {
-    return tokens.access_token;
-  }
-  return refreshAccessToken();
+async function authorizedFetch(url) {
+  return auth.authorizedFetch(url);
 }
 async function fetchCurrentlyPlaying() {
-  let token = await accessToken();
-  let result = await fetch(API_CURRENT, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
-  if (result.status === 401) {
-    token = await accessToken(true);
-    result = await fetch(API_CURRENT, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
-  }
-  return result;
+  return authorizedFetch(API_CURRENT);
 }
 async function poll() {
   if (!active) return;
@@ -515,7 +202,7 @@ async function poll() {
       throw new FatalError(getOAuthErrorMessage(response.status, details));
     }
   } catch (error) {
-    if (error instanceof FatalError || !tokens) {
+    if (error instanceof FatalError || !auth.hasSession) {
       console.error('Spotify Widget:', error.message);
       active = false;
       hideTrack();
@@ -532,42 +219,31 @@ async function poll() {
 }
 class FatalError extends Error {}
 function exportConnection() {
-  if (!tokens?.refresh_token || !clientId) {
-    showStatus('Сначала авторизуй Spotify в этом браузере.');
-    return;
-  }
-  els.transferInput.value = JSON.stringify({ version: 1, client_id: clientId, refresh_token: tokens.refresh_token });
-  els.transferInput.focus();
-  els.transferInput.select();
-  showStatus('Скопируй содержимое поля вручную (Ctrl+C), вставь в источник OBS и нажми «Импортировать». Не передавай никому.');
+  try {
+    els.transferInput.value = JSON.stringify(auth.exportConnection());
+    els.transferInput.focus();
+    els.transferInput.select();
+    showStatus('Скопируй JSON подключения и перенеси в OBS. Не публикуй и не передавай токен.');
+  } catch(error) { showStatus(error.message); }
 }
 function importConnection() {
   try {
-    const bundle = JSON.parse(els.transferInput.value);
-    if (bundle.version !== 1 || !/^[a-zA-Z0-9]{16,64}$/.test(bundle.client_id) ||
-        typeof bundle.refresh_token !== 'string' || bundle.refresh_token.length < 20 || bundle.refresh_token.length > 4096) {
-      throw new Error('Недопустимые данные импорта.');
-    }
-    // Transfer only refresh token; a fresh access token is obtained for the OBS instance.
-    clientId = bundle.client_id;
-    localStorage.setItem(KEYS.clientId, clientId);
-    tokens = { access_token: '', refresh_token: bundle.refresh_token, expires_at: 0 };
-    localStorage.setItem(KEYS.tokens, JSON.stringify(tokens));
-    els.transferInput.value = '';
-    els.clientInput.value = clientId;
-    showStatus('Данные импортированы. Проверяем доступ к Spotify...');
-    if (!active) { active = true; poll(); }
-  } catch (error) { showStatus(`Ошибка импорта: ${error.message}`); }
+    auth.importConnection(els.transferInput.value);
+    clientId=auth.clientId;
+    els.transferInput.value='';
+    els.clientInput.value=clientId;
+    showStatus('Подключение импортировано. Проверяем Spotify API...');
+    if (!active) { active=true; poll(); }
+  } catch(error) { showStatus(`Ошибка импорта: ${error.message}`); }
 }
 function disconnect() {
-  active = false;
-  if (pollTimer) clearTimeout(pollTimer);
+  active=false;
+  if(pollTimer) clearTimeout(pollTimer);
   clearVisibilityTimer();
-  discardTokens();
-  sessionStorage.removeItem(KEYS.state);
-  sessionStorage.removeItem(KEYS.verifier);
+  auth.disconnect();
   hideTrack();
-  showStatus('Авторизация сброшена. Для повторного подключения нажми кнопку выше.');
+  els.transferInput.value='';
+  showStatus('Авторизация сброшена.');
 }
 function resize() {
   const maxWidth = 550; // original design's approximately 500px body + margins
@@ -591,17 +267,7 @@ async function start() {
   setVisibility(false);
   els.main.style.opacity = '0';
   ticker = setInterval(drawProgress, 250);
-  clearArtwork(); // Empty, neutral state until a real cover has loaded.
-  for (const img of [els.art, els.artBack, els.bg, els.bgBack]) {
-    img.addEventListener('error', () => {
-      if (!displayedArtwork) return;
-      brokenArtwork.add(displayedArtwork);
-      const id = currentTrack?.id;
-      const item = currentItem;
-      clearArtwork();
-      if (id && item) void ensureArtwork(id, item);
-    });
-  }
+  artworkController.clear();
 
   if (params.get('demo') === '1') {
     const demoTracks = [
@@ -635,7 +301,7 @@ async function start() {
   }
   try { await processOAuthCallback(); }
   catch (e) { showStatus(`Ошибка подключения: ${e.message}`); return; }
-  if (!clientId || !tokens?.refresh_token) {
+  if (!auth.hasSession) {
     showStatus('Вставь Client ID и подключи Spotify. Секретный ключ не нужен.');
     return;
   }
