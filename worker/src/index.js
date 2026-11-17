@@ -94,11 +94,32 @@ async function spotifyToken(params) {
   if (!response.ok) throw Error("Spotify OAuth HTTP " + response.status + ": " + (value.error||"unknown"));
   return value;
 }
+async function checkAdminKey(env, value) {
+  if (typeof value!=="string" || value.length<24 || !env.PAIRING_KEY) return false;
+  return await sha256(value)===await sha256(env.PAIRING_KEY);
+}
+async function createInvite(req,env) {
+  const body=await bodyJson(req);
+  if (!await checkAdminKey(env,body.pairingKey)) return json({error:"unauthorized"},403,env);
+  const code=randomUrl(24);
+  const expiresAt=Date.now()+48*60*60*1000;
+  await env.DB.prepare("INSERT INTO invites (token_hash,created_at,expires_at) VALUES (?,?,?)")
+    .bind(await sha256(code),Date.now(),expiresAt).run();
+  return json({inviteCode:code,expiresAt},200,env);
+}
 async function connectStart(req,env) {
   const body=await bodyJson(req);
-  if (!body.pairingKey || typeof body.pairingKey!=="string" ||
-      !env.PAIRING_KEY || await sha256(body.pairingKey)!==await sha256(env.PAIRING_KEY)) {
-    return json({error:"unauthorized",message:"Неверный ключ подключения Worker."},403,env);
+  const admin=await checkAdminKey(env,body.pairingKey);
+  if(!admin) {
+    // Single-use, 48-hour capability; invite holders never learn PAIRING_KEY.
+    const invite=typeof body.invite==="string" ? body.invite : "";
+    if(!/^[a-zA-Z0-9_-]{32}$/.test(invite)) {
+      return json({error:"unauthorized",message:"Нужен ключ владельца или действующее приглашение."},403,env);
+    }
+    const accepted=await env.DB.prepare(
+      "UPDATE invites SET used_at=? WHERE token_hash=? AND used_at IS NULL AND expires_at>? RETURNING token_hash"
+    ).bind(Date.now(),await sha256(invite),Date.now()).first();
+    if(!accepted) return json({error:"invalid_invite",message:"Приглашение истекло или уже использовано."},403,env);
   }
   const state=randomUrl(32);
   const verifier=randomUrl(64);
@@ -308,6 +329,7 @@ export default {
     if(request.method!=="POST") return json({error:"method_not_allowed"},405,env);
     try {
       if(url.pathname==="/oauth/start") return await connectStart(request,env);
+      if(url.pathname==="/api/invite/create") return await createInvite(request,env);
       if(url.pathname==="/api/now") return await now(request,env);
       if(["/api/owner","/api/revoke","/api/rotate"].includes(url.pathname)) {
         return await ownerAction(request,env,url.pathname);
