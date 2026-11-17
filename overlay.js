@@ -102,11 +102,14 @@ function render(song){
     previousId=song.id;
     textEffect.animate(String(song.title||""),String(song.artist||""),wasPrevious);
     void image(song.image,song.id);
+  } else if(song.image && !els.main.classList.contains("has-artwork")) {
+    void image(song.image,song.id);
   }
   els.source.href=/^https:\/\/open\.spotify\.com\//.test(song.spotifyUrl||"")
     ?song.spotifyUrl:"https://open.spotify.com/";
   tick();
-  if(changed || !visible){
+  // Do not repeatedly reveal a time-limited popup after its duration expires.
+  if(changed || (!visible && duration===0)){
     clearTimeout(hideTimer);
     show(true);
     if(duration>0)hideTimer=setTimeout(()=>show(false),duration);
