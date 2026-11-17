@@ -5,7 +5,7 @@
   "description": "Static Spotify now-playing overlay for OBS. OAuth PKCE, no runtime dependencies.",
   "scripts": {
     "test": "node --test",
-    "check": "node --check script.js && node --check player-core.js && node --check src/spotify-auth.js && node --check src/artwork.js && node --check src/track-animation.js && node --check dashboard.js && node --check overlay.js && node --check worker/src/index.js && node --check worker/src/artwork.js && node --check src/public-artwork.js"
+    "check": "node --check script.js && node --check player-core.js && node --check src/spotify-auth.js && node --check src/artwork.js && node --check src/track-animation.js && node --check dashboard.js && node --check overlay.js && node --check worker/src/index.js && node --check worker/src/artwork.js && node --check src/public-artwork.js && node --check src/cover-priority.js"
   },
   "license": "GPL-3.0-only"
 }
