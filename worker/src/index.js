@@ -1,3 +1,4 @@
+import {resolveArtwork} from './artwork.js';
 /*
  * Wither Spotify Widget - server-side Spotify connector.
  * Copyright (C) 2026 contributors. GPL-3.0-only; see LICENSE.
@@ -219,25 +220,6 @@ function projectCurrent(payload) {
     observedAt:Date.now(),
   };
 }
-async function fallbackImage(env, itemId) {
-  if (!/^[a-zA-Z0-9]{22}$/.test(itemId||"")) return null;
-  const cached=await env.DB.prepare("SELECT url,checked_at FROM art_cache WHERE id=?").bind(itemId).first();
-  if (cached && Date.now()-cached.checked_at<86400000) return cached.url||null;
-  let url=null;
-  try {
-    const request=new URL("https://open.spotify.com/oembed");
-    request.searchParams.set("url","https://open.spotify.com/track/"+itemId);
-    const response=await fetch(request.toString(),{headers:{"Accept":"application/json"}});
-    if(response.ok) {
-      const j=await response.json();
-      if(typeof j.thumbnail_url==="string" && j.thumbnail_url.startsWith("https://")) url=j.thumbnail_url;
-    }
-  } catch {}
-  await env.DB.prepare(
-    "INSERT INTO art_cache (id,url,checked_at) VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET url=excluded.url,checked_at=excluded.checked_at"
-  ).bind(itemId,url,Date.now()).run();
-  return url;
-}
 async function now(req,env) {
   const data=await bodyJson(req);
   const row=await getOverlay(env,data);
@@ -287,8 +269,11 @@ async function now(req,env) {
     const raw=response.status===204 ? null : await response.json();
     const result=projectCurrent(raw);
     if(result.playing && !result.image) {
-      const id=/^[a-zA-Z0-9]{22}$/.test(raw.item?.id||"") ? raw.item.id : null;
-      if(id) result.image=await fallbackImage(env,id);
+      // First ask oEmbed, then Spotify's supported single-track/album catalog API.
+      // Negative artwork responses expire after 60 seconds rather than 24 hours.
+      // Artwork failure is non-fatal: title and playback time still update.
+      try { result.image=await resolveArtwork(env,raw.item,tokens); }
+      catch(error) { console.warn("Artwork lookup failed:",error.message); }
     }
     await env.DB.prepare(
       "UPDATE overlays SET token_cipher=?,cache_json=?,cache_until=?,rate_limit_until=0,lock_until=0 WHERE id=?"
