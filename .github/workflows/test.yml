@@ -1,0 +1,27 @@
+name: Validate widget
+
+on:
+  pull_request:
+  push:
+    branches: [main, 'refactor/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Run tests
+        run: npm test
+      - name: Check JavaScript syntax
+        run: |
+          node --check script.js
+          node --check player-core.js
+          node --check src/track-animation.js
