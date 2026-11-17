@@ -1,7 +1,6 @@
 /*
- * Modernized Spotify Widget for OBS, based on nuttylmao/spotify-widget.
- * Copyright (C) 2026 contributors. GPL-3.0-or-later.
- * Pure functions shared by the overlay and offline tests.
+ * Wither Spotify Widget — pure playback helpers.
+ * Modified 2026-11-17. GNU GPL version 3; see LICENSE.
  */
 export const DEFAULT_POLL_MS = 3000;
 export const MIN_POLL_MS = 2000;
