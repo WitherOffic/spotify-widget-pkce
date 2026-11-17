@@ -1,8 +1,7 @@
 /*
- * Spotify Widget — PKCE Edition (2026)
- * Based on nuttylmao/spotify-widget (GPL-3.0).
- * No SMTC, client secret, service worker, proxy, or resident companion app.
- * Needs static HTTPS hosting + a Spotify Developer application owned by the user.
+ * Wither Spotify Widget — OBS browser overlay.
+ * Modified 2026-11-17. GNU GPL version 3; see LICENSE.
+ * Static HTML/CSS/JS and Spotify Web API, no resident app required.
  */
 import {
   DEFAULT_POLL_MS, parsePollMs, retryAfterMs, normalizeTrack,
