@@ -1,10 +1,11 @@
 {
-  "name": "nutty-spotify-widget-pkce",
-  "version": "1.0.0",
+  "name": "wither-spotify-widget",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
-  "description": "Static Spotify PKCE widget for OBS; GPL-3.0-or-later",
+  "description": "Static Spotify now-playing overlay for OBS (OAuth PKCE, zero runtime dependencies).",
   "scripts": {
-    "test": "node --test tests/core.test.mjs && node --experimental-vm-modules --test tests/widget_vm.test.mjs"
+    "test": "node --test",
+    "check": "node --check script.js && node --check player-core.js && node --check src/track-animation.js"
   }
 }
