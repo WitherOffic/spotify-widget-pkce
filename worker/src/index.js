@@ -103,8 +103,15 @@ async function createInvite(req,env) {
   if (!await checkAdminKey(env,body.pairingKey)) return json({error:"unauthorized"},403,env);
   const code=randomUrl(24);
   const expiresAt=Date.now()+48*60*60*1000;
-  await env.DB.prepare("INSERT INTO invites (token_hash,created_at,expires_at) VALUES (?,?,?)")
-    .bind(await sha256(code),Date.now(),expiresAt).run();
+  try {
+    await env.DB.prepare("INSERT INTO invites (token_hash,created_at,expires_at) VALUES (?,?,?)")
+      .bind(await sha256(code),Date.now(),expiresAt).run();
+  } catch(error) {
+    if(/no such table: invites|table invites does not exist/i.test(error?.message||"")) {
+      return json({error:"invites_not_ready",message:"Создай таблицу invites в Cloudflare D1 (инструкция на GitHub)."},503,env);
+    }
+    throw error;
+  }
   return json({inviteCode:code,expiresAt},200,env);
 }
 async function connectStart(req,env) {
@@ -116,9 +123,17 @@ async function connectStart(req,env) {
     if(!/^[a-zA-Z0-9_-]{32}$/.test(invite)) {
       return json({error:"unauthorized",message:"Нужен ключ владельца или действующее приглашение."},403,env);
     }
-    const accepted=await env.DB.prepare(
-      "UPDATE invites SET used_at=? WHERE token_hash=? AND used_at IS NULL AND expires_at>? RETURNING token_hash"
-    ).bind(Date.now(),await sha256(invite),Date.now()).first();
+    let accepted;
+    try {
+      accepted=await env.DB.prepare(
+        "UPDATE invites SET used_at=? WHERE token_hash=? AND used_at IS NULL AND expires_at>? RETURNING token_hash"
+      ).bind(Date.now(),await sha256(invite),Date.now()).first();
+    } catch(error) {
+      if(/no such table: invites|table invites does not exist/i.test(error?.message||"")) {
+        return json({error:"invites_not_ready",message:"Владелец ещё не настроил приглашения в Cloudflare D1."},503,env);
+      }
+      throw error;
+    }
     if(!accepted) return json({error:"invalid_invite",message:"Приглашение истекло или уже использовано."},403,env);
   }
   const state=randomUrl(32);
