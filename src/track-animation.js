@@ -1,6 +1,6 @@
 /*
  * Wither Spotify Widget — text transition renderer.
- * Modified project, 2026. Licensed under GPL-3.0-or-later; see LICENSE.
+ * Modified project, 2026. Licensed under GNU GPL version 3; see LICENSE.
  */
 export function createTextTransition(viewport, titleNode, artistNode, { enabled = true } = {}) {
   const animations = new Set();
