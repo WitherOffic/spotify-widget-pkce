@@ -1,6 +1,6 @@
 /*
  * Wither Spotify Widget — browser-only Spotify OAuth PKCE.
- * Modified 2026-11-17. GPL-3.0-or-later; see LICENSE.
+ * Modified 2026-11-17. GNU GPL version 3; see LICENSE.
  * Never place refresh tokens or client secrets in a browser-source URL.
  */
 export const AUTH_KEYS = Object.freeze({
