@@ -78,6 +78,10 @@ let trackSampledAt = 0;
 let failureCount = 0;
 let wasPlaying = false;
 let currentVisible = false;
+let displayedArtwork = null;
+const artworkCache = new Map();
+const ARTWORK_RETRY_MS = 60000;
+let rateLimitedUntil = 0;
 
 // Display helpers.
 function setVisibility(visible) {
@@ -100,6 +104,7 @@ function hideTrack() {
   currentTrack = null;
   lastTrackId = null;
   wasPlaying = false;
+  displayedArtwork = null;
   setVisibility(false);
 }
 function showStatus(message) {
@@ -132,6 +137,82 @@ function updateImage(front, back, url) {
   }, 250);
   front._backTimeout = setTimeout(() => { back.src = target; }, 850);
 }
+// Spotify can return track data without album.images. Lookup artwork by track/album
+// ID using the supported individual catalog endpoints, only once per song.
+function imageUrlFrom(item) {
+  for (const images of [item?.album?.images, item?.images, item?.show?.images]) {
+    if (Array.isArray(images)) {
+      const image = images.find(entry => /^https:\/\//i.test(entry?.url || ''));
+      if (image) return image.url;
+    }
+  }
+  return null;
+}
+function displayArtwork(url) {
+  const target = /^https:\/\//i.test(url || '') ? url : null;
+  if (target === displayedArtwork) return;
+  displayedArtwork = target;
+  updateImage(els.art, els.artBack, target);
+  updateImage(els.bg, els.bgBack, target);
+}
+function spotifyId(item) {
+  const id = item?.id || (typeof item?.uri === 'string' ? item.uri.split(':')[2] : '');
+  return /^[a-zA-Z0-9]{22}$/.test(id || '') ? id : null;
+}
+function noteRateLimit(response) {
+  const interval = retryAfterMs(response.headers.get('Retry-After')) ?? 60000;
+  rateLimitedUntil = Math.max(rateLimitedUntil, Date.now() + Math.max(1000, interval));
+  return interval;
+}
+async function fetchCatalog(path) {
+  if (Date.now() < rateLimitedUntil) return null;
+  const request = token => fetch(`https://api.spotify.com/v1/${path}`, {
+    headers: { Authorization: `Bearer ${token}` }, cache: 'no-store',
+  });
+  let response = await request(await accessToken());
+  if (response.status === 401) response = await request(await accessToken(true));
+  if (response.status === 429) {
+    noteRateLimit(response);
+    return null;
+  }
+  if (!response.ok) {
+    console.warn(`Spotify artwork lookup failed: ${path.split('/')[0]}, HTTP ${response.status}`);
+    return null;
+  }
+  return response.json();
+}
+async function lookupArtwork(item) {
+  if (item?.is_local) return null;
+  const albumId = spotifyId(item?.album);
+  if (albumId) {
+    const album = await fetchCatalog(`albums/${albumId}`);
+    const url = imageUrlFrom(album);
+    if (url) return url;
+  }
+  const id = spotifyId(item);
+  if (!id) return null;
+  const kind = item?.type === 'episode' ? 'episodes' : 'tracks';
+  const metadata = await fetchCatalog(`${kind}/${id}`);
+  return imageUrlFrom(metadata);
+}
+async function ensureArtwork(trackId, item) {
+  const cached = artworkCache.get(trackId);
+  if (cached && (cached.pending || cached.url || Date.now() - cached.checkedAt < ARTWORK_RETRY_MS)) {
+    if (cached.url && currentTrack?.id === trackId) displayArtwork(cached.url);
+    return;
+  }
+  artworkCache.set(trackId, { pending: true, url: null, checkedAt: Date.now() });
+  try {
+    const url = await lookupArtwork(item);
+    artworkCache.set(trackId, { pending: false, url, checkedAt: Date.now() });
+    if (url && currentTrack?.id === trackId) displayArtwork(url);
+    if (!url) console.warn('Spotify has not provided album artwork for this song.');
+  } catch (error) {
+    artworkCache.set(trackId, { pending: false, url: null, checkedAt: Date.now() });
+    console.warn('Spotify artwork lookup error:', error.message);
+  }
+  if (artworkCache.size > 80) artworkCache.delete(artworkCache.keys().next().value);
+}
 function drawProgress() {
   if (!currentTrack) return;
   const progress = progressAt(currentTrack, performance.now() - trackSampledAt);
@@ -140,19 +221,23 @@ function drawProgress() {
   els.elapsed.textContent = formatTime(progress);
   els.remaining.textContent = `-${formatTime(duration - progress)}`;
 }
-function renderPlaying(data) {
+function renderPlaying(data, responseRoundTripMs = 0) {
   const track = normalizeTrack(data);
   if (!track) { hideTrack(); return; }
   const newTrack = track.id !== lastTrackId;
   currentTrack = track;
-  trackSampledAt = performance.now();
+  // Resynchronize on every API response, correcting drift and seeking.
+  // Half the measured round trip approximates the age of the returned snapshot.
+  trackSampledAt = performance.now() - Math.min(Math.max(responseRoundTripMs / 2, 0), 750);
   if (newTrack) {
     updateText(els.song, track.title);
     updateText(els.artist, track.artist);
-    updateImage(els.art, els.artBack, track.image);
-    updateImage(els.bg, els.bgBack, track.image);
     lastTrackId = track.id;
+    displayedArtwork = ''; // Make even a missing image reset the previous cover.
   }
+  const artwork = track.image || artworkCache.get(track.id)?.url || null;
+  displayArtwork(artwork);
+  if (!artwork) void ensureArtwork(track.id, data.item);
   drawProgress();
   if (newTrack || !wasPlaying) revealForTrack();
   wasPlaying = true;
@@ -288,20 +373,27 @@ async function poll() {
   if (!active) return;
   let delay = pollMs;
   try {
+    // Share the 429 cooldown with catalog artwork lookups.
+    if (Date.now() < rateLimitedUntil) {
+      delay = Math.max(pollMs, rateLimitedUntil - Date.now());
+      return;
+    }
+    const requestStartedAt = performance.now();
     const response = await fetchCurrentlyPlaying();
+    const roundTripMs = performance.now() - requestStartedAt;
     if (response.status === 204) {
       hideTrack(); // Spotify has no active playback
       hideStatus();
       failureCount = 0;
     } else if (response.ok) {
       const data = await response.json();
-      renderPlaying(data);
+      renderPlaying(data, roundTripMs);
       hideStatus();
       failureCount = 0;
     } else if (response.status === 429) {
       // Honour Retry-After and avoid hitting developer quota harder.
-      const retryMs = retryAfterMs(response.headers.get('Retry-After'));
-      delay = Math.max(pollMs, retryMs ?? 60000);
+      const retryMs = noteRateLimit(response);
+      delay = Math.max(pollMs, retryMs);
       console.warn(`Spotify 429 — next request in ${Math.ceil(delay / 1000)} seconds.`);
     } else if (response.status === 401 || response.status === 403) {
       const details = await response.text().catch(() => '');
@@ -391,6 +483,15 @@ async function start() {
   setVisibility(false);
   els.main.style.opacity = '0';
   ticker = setInterval(drawProgress, 250);
+  for (const img of [els.art, els.artBack, els.bg, els.bgBack]) {
+    img.addEventListener('error', () => {
+      const placeholder = new URL('./images/placeholder.svg', location.href).href;
+      if (img.src !== placeholder) {
+        console.warn('Spotify artwork image could not be loaded:', img.src);
+        img.src = placeholder;
+      }
+    });
+  }
 
   if (params.get('demo') === '1') {
     renderPlaying({ is_playing: true, progress_ms: 29000, currently_playing_type: 'track', item: {
