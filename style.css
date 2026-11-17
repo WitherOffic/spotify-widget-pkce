@@ -70,3 +70,19 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helve
 #statusContainer button.secondary { background: #5b5157; }
 
 #statusContainer textarea { margin-top: 12px; width: 100%; min-height: 60px; padding: 9px; border-radius: 7px; border: 1px solid #89727a; color: #fff; background: #29232a; resize: vertical; font: 11px/1.4 Consolas, monospace; }
+
+
+/* Neutral missing-artwork state and safe image transitions (Nov 2026). */
+#albumArtBox { background: linear-gradient(135deg, #292b31, #17191d); }
+#songInfoBox {
+  background: linear-gradient(115deg, #35373d, #202228);
+  border-radius: var(--corner-radius);
+}
+#songInfo { background: rgba(14, 15, 19, .30); opacity: 1; z-index: 2; }
+#backgroundArt { z-index: 0; opacity: 0; transition: opacity .35s ease; }
+#backgroundImage, #backgroundImageBack { display: block; }
+#mainContainer.has-artwork #backgroundArt { opacity: .78; }
+#mainContainer:not(.has-artwork) #albumArt,
+#mainContainer:not(.has-artwork) #albumArtBack,
+#mainContainer:not(.has-artwork) #backgroundImage,
+#mainContainer:not(.has-artwork) #backgroundImageBack { display: none; }
