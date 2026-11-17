@@ -8,6 +8,7 @@ import {
   DEFAULT_POLL_MS, parsePollMs, retryAfterMs, normalizeTrack,
   progressAt, formatTime, clamp, getOAuthErrorMessage,
 } from './player-core.js';
+import { createTextTransition } from './src/track-animation.js';
 
 const params = new URLSearchParams(window.location.search);
 const KEYS = {
@@ -91,7 +92,7 @@ let rateLimitedUntil = 0;
 // Visual transitions do not affect the playback clock or API polling.
 const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
 const animatedText = !reducedMotion && !params.has('noAnimation');
-const runningTextAnimations = [];
+const textTransition = createTextTransition(els.trackViewport, els.song, els.artist, { enabled: animatedText });
 
 // Display helpers.
 function setVisibility(visible) {
@@ -111,7 +112,7 @@ function revealForTrack() {
 }
 function hideTrack() {
   clearVisibilityTimer();
-  cancelTrackTextAnimations();
+  textTransition.cancel();
   currentTrack = null;
   lastTrackId = null;
   wasPlaying = false;
@@ -127,62 +128,6 @@ function showStatus(message) {
 }
 function hideStatus() {
   if (!debug) els.panel.hidden = true;
-}
-// The outgoing text slides left while the incoming song enters from the right.
-// Progress and timestamps are independent from these animations.
-function cancelTrackTextAnimations() {
-  for (const animation of runningTextAnimations.splice(0)) {
-    try { animation.cancel(); } catch {}
-  }
-  for (const ghost of els.trackViewport.querySelectorAll('.track-text-ghost')) ghost.remove();
-}
-function makeGhost(title, artist) {
-  const ghost = document.createElement('div');
-  ghost.className = 'track-text-ghost';
-  const oldSong = document.createElement('div');
-  oldSong.className = 'track-text-ghost-title';
-  oldSong.textContent = title;
-  const oldArtist = document.createElement('div');
-  oldArtist.className = 'track-text-ghost-artist';
-  oldArtist.textContent = artist;
-  ghost.append(oldSong, oldArtist);
-  return ghost;
-}
-function transitionTrackText(title, artist, hadPreviousTrack) {
-  const previousTitle = els.song.textContent;
-  const previousArtist = els.artist.textContent;
-  cancelTrackTextAnimations();
-
-  // Update the real text immediately; the animation only affects presentation.
-  els.song.textContent = title;
-  els.artist.textContent = artist;
-  if (!animatedText || !els.song.animate || !els.artist.animate) return;
-
-  if (hadPreviousTrack && (previousTitle !== title || previousArtist !== artist)) {
-    const ghost = makeGhost(previousTitle, previousArtist);
-    els.trackViewport.appendChild(ghost);
-    const outgoing = ghost.animate([
-      { opacity: 1, transform: 'translate3d(0,0,0)', filter: 'blur(0px)' },
-      { opacity: 0, transform: 'translate3d(-42px,0,0)', filter: 'blur(4px)' },
-    ], { duration: 340, easing: 'cubic-bezier(.55,.03,.83,.45)', fill: 'both' });
-    runningTextAnimations.push(outgoing);
-    void outgoing.finished.then(() => ghost.remove(), () => ghost.remove());
-  }
-
-  const incomingFrames = [
-    { opacity: 0, transform: 'translate3d(42px,0,0)', filter: 'blur(4px)' },
-    { opacity: 1, transform: 'translate3d(0,0,0)', filter: 'blur(0px)' },
-  ];
-  const songAnimation = els.song.animate(incomingFrames, {
-    duration: 520, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'both',
-  });
-  const artistAnimation = els.artist.animate(incomingFrames, {
-    duration: 550, delay: 70, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'both',
-  });
-  runningTextAnimations.push(songAnimation, artistAnimation);
-  void artistAnimation.finished.then(() => {
-    if (runningTextAnimations.includes(artistAnimation)) cancelTrackTextAnimations();
-  }, () => {});
 }
 // Album art is optional: never show a broken image or the old colored SVG.
 // Verify image URLs before attaching them to the visible DOM.
@@ -336,7 +281,7 @@ function renderPlaying(data, responseRoundTripMs = 0) {
   // Half the measured round trip approximates the age of the returned snapshot.
   trackSampledAt = performance.now() - Math.min(Math.max(responseRoundTripMs / 2, 0), 750);
   if (newTrack) {
-    transitionTrackText(track.title, track.artist, Boolean(lastTrackId));
+    textTransition.animate(track.title, track.artist, Boolean(lastTrackId));
     lastTrackId = track.id;
     clearArtwork(); // Never carry over a previous song's cover.
   }
