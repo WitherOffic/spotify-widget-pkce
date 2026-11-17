@@ -31,3 +31,12 @@ CREATE TABLE IF NOT EXISTS invites (
   expires_at INTEGER NOT NULL,
   used_at INTEGER
 );
+
+-- Revocable, invitation-only admin sessions. Browser receives a random token;
+-- D1 stores its SHA-256 hash. No PAIRING_KEY is persisted in the browser.
+CREATE TABLE IF NOT EXISTS admin_sessions (
+  token_hash TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  revoked_at INTEGER
+);
