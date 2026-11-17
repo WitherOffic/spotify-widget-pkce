@@ -41,6 +41,8 @@ const els = {
   artBack: document.getElementById('albumArtBack'),
   bg: document.getElementById('backgroundImage'),
   bgBack: document.getElementById('backgroundImageBack'),
+  trackText: document.getElementById('trackText'),
+  trackViewport: document.getElementById('trackTextViewport'),
   song: document.getElementById('songLabel'),
   artist: document.getElementById('artistLabel'),
   progress: document.getElementById('progressBar'),
@@ -86,6 +88,10 @@ const brokenArtwork = new Set();
 const artworkCache = new Map();
 const ARTWORK_RETRY_MS = 60000;
 let rateLimitedUntil = 0;
+// Visual transitions do not affect the playback clock or API polling.
+const reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+const animatedText = !reducedMotion && !params.has('noAnimation');
+const runningTextAnimations = [];
 
 // Display helpers.
 function setVisibility(visible) {
@@ -105,6 +111,7 @@ function revealForTrack() {
 }
 function hideTrack() {
   clearVisibilityTimer();
+  cancelTrackTextAnimations();
   currentTrack = null;
   lastTrackId = null;
   wasPlaying = false;
@@ -121,14 +128,61 @@ function showStatus(message) {
 function hideStatus() {
   if (!debug) els.panel.hidden = true;
 }
-function updateText(el, value) {
-  if (el.textContent === value) return;
-  el.classList.add('text-fade');
-  clearTimeout(el._textTimeout);
-  el._textTimeout = setTimeout(() => {
-    el.textContent = value; // never innerHTML: Spotify content is untrusted
-    el.classList.remove('text-fade');
-  }, 200);
+// The outgoing text slides left while the incoming song enters from the right.
+// Progress and timestamps are independent from these animations.
+function cancelTrackTextAnimations() {
+  for (const animation of runningTextAnimations.splice(0)) {
+    try { animation.cancel(); } catch {}
+  }
+  for (const ghost of els.trackViewport.querySelectorAll('.track-text-ghost')) ghost.remove();
+}
+function makeGhost(title, artist) {
+  const ghost = document.createElement('div');
+  ghost.className = 'track-text-ghost';
+  const oldSong = document.createElement('div');
+  oldSong.className = 'track-text-ghost-title';
+  oldSong.textContent = title;
+  const oldArtist = document.createElement('div');
+  oldArtist.className = 'track-text-ghost-artist';
+  oldArtist.textContent = artist;
+  ghost.append(oldSong, oldArtist);
+  return ghost;
+}
+function transitionTrackText(title, artist, hadPreviousTrack) {
+  const previousTitle = els.song.textContent;
+  const previousArtist = els.artist.textContent;
+  cancelTrackTextAnimations();
+
+  // Update the real text immediately; the animation only affects presentation.
+  els.song.textContent = title;
+  els.artist.textContent = artist;
+  if (!animatedText || !els.song.animate || !els.artist.animate) return;
+
+  if (hadPreviousTrack && (previousTitle !== title || previousArtist !== artist)) {
+    const ghost = makeGhost(previousTitle, previousArtist);
+    els.trackViewport.appendChild(ghost);
+    const outgoing = ghost.animate([
+      { opacity: 1, transform: 'translate3d(0,0,0)', filter: 'blur(0px)' },
+      { opacity: 0, transform: 'translate3d(-42px,0,0)', filter: 'blur(4px)' },
+    ], { duration: 340, easing: 'cubic-bezier(.55,.03,.83,.45)', fill: 'both' });
+    runningTextAnimations.push(outgoing);
+    void outgoing.finished.then(() => ghost.remove(), () => ghost.remove());
+  }
+
+  const incomingFrames = [
+    { opacity: 0, transform: 'translate3d(42px,0,0)', filter: 'blur(4px)' },
+    { opacity: 1, transform: 'translate3d(0,0,0)', filter: 'blur(0px)' },
+  ];
+  const songAnimation = els.song.animate(incomingFrames, {
+    duration: 520, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'both',
+  });
+  const artistAnimation = els.artist.animate(incomingFrames, {
+    duration: 550, delay: 70, easing: 'cubic-bezier(.16,1,.3,1)', fill: 'both',
+  });
+  runningTextAnimations.push(songAnimation, artistAnimation);
+  void artistAnimation.finished.then(() => {
+    if (runningTextAnimations.includes(artistAnimation)) cancelTrackTextAnimations();
+  }, () => {});
 }
 // Album art is optional: never show a broken image or the old colored SVG.
 // Verify image URLs before attaching them to the visible DOM.
@@ -282,8 +336,7 @@ function renderPlaying(data, responseRoundTripMs = 0) {
   // Half the measured round trip approximates the age of the returned snapshot.
   trackSampledAt = performance.now() - Math.min(Math.max(responseRoundTripMs / 2, 0), 750);
   if (newTrack) {
-    updateText(els.song, track.title);
-    updateText(els.artist, track.artist);
+    transitionTrackText(track.title, track.artist, Boolean(lastTrackId));
     lastTrackId = track.id;
     clearArtwork(); // Never carry over a previous song's cover.
   }
@@ -551,10 +604,28 @@ async function start() {
   }
 
   if (params.get('demo') === '1') {
-    renderPlaying({ is_playing: true, progress_ms: 29000, currently_playing_type: 'track', item: {
-      uri: 'spotify:track:demo', type: 'track', name: 'Демонстрационный трек', duration_ms: 201000,
-      artists: [{ name: 'Тестовый исполнитель' }], album: { images: [] },
-    }});
+    const demoTracks = [
+      ['Демонстрационный трек', 'Тестовый исполнитель'],
+      ['Следующая композиция', 'Другой исполнитель'],
+      ['Ещё одна песня', 'Исполнитель № 3'],
+    ];
+    let demoIndex = 0;
+    const showDemoTrack = index => {
+      const [name, artist] = demoTracks[index];
+      renderPlaying({
+        is_playing: true, progress_ms: 7000, currently_playing_type: 'track',
+        item: {
+          uri: `spotify:track:demo-${index}`, type: 'track',
+          name, duration_ms: 180000,
+          artists: [{ name: artist }], album: { images: [] },
+        },
+      });
+    };
+    showDemoTrack(demoIndex);
+    setInterval(() => {
+      demoIndex = (demoIndex + 1) % demoTracks.length;
+      showDemoTrack(demoIndex);
+    }, 6500);
     hideStatus();
     return;
   }
