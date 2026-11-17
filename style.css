@@ -86,3 +86,38 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helve
 #mainContainer:not(.has-artwork) #albumArtBack,
 #mainContainer:not(.has-artwork) #backgroundImage,
 #mainContainer:not(.has-artwork) #backgroundImageBack { display: none; }
+
+
+/* Slide animation, scoped to the track text. Progress bar stays in place. */
+#trackTextViewport {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  isolation: isolate;
+  padding: 2px 0;
+}
+#trackText { position: relative; width: 100%; min-width: 0; }
+.track-text-ghost {
+  position: absolute;
+  inset: 2px 0 auto 0;
+  width: 100%;
+  pointer-events: none;
+  z-index: 2;
+  will-change: transform, opacity;
+}
+.track-text-ghost-title {
+  font-weight: 700;
+  font-size: 20px;
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.track-text-ghost-artist {
+  font-weight: 400;
+  font-size: 16px;
+  line-height: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
