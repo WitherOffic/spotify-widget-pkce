@@ -189,3 +189,110 @@ test('public invitation endpoint does not mint invites without pairing key',asyn
   assert.equal(response.status,403);
   assert.equal((await response.json()).error,'unauthorized');
 });
+
+function adminDB(){
+  const sessions=new Map(),invites=[];
+  return {
+    sessions,invites,
+    prepare(sql){
+      return {bind(...args){
+        return {
+          async run(){
+            if(sql.includes("INSERT INTO admin_sessions")){
+              sessions.set(args[0],{expires_at:args[2],revoked_at:null});
+            }else if(sql.includes("INSERT INTO invites")){
+              invites.push(args);
+            }else{
+              throw Error("Unexpected D1 run: "+sql);
+            }
+            return {success:true};
+          },
+          async first(){
+            if(sql.includes("SELECT expires_at,revoked_at FROM admin_sessions")){
+              return sessions.get(args[0])||null;
+            }
+            if(sql.includes("UPDATE admin_sessions SET revoked_at=")){
+              const row=sessions.get(args[1]);
+              if(!row || row.revoked_at!==null || row.expires_at<=args[2])return null;
+              row.revoked_at=args[0];
+              return {token_hash:args[1]};
+            }
+            throw Error("Unexpected D1 first: "+sql);
+          },
+        };
+      }};
+    },
+  };
+}
+async function adminPost(db,path,data){
+  return worker.fetch(new Request("https://example.workers.dev"+path,{
+    method:"POST",
+    headers:{Origin:"https://witheroffic.github.io","Content-Type":"application/json"},
+    body:JSON.stringify(data),
+  }),{...env,DB:db});
+}
+
+test("admin activation stores only a session hash and never the pairing secret",async()=>{
+  const db=adminDB();
+  const response=await adminPost(db,"/api/admin/activate",{pairingKey:env.PAIRING_KEY});
+  assert.equal(response.status,200);
+  const data=await response.json();
+  assert.match(data.adminSession,/^[A-Za-z0-9_-]{43}$/);
+  assert.equal(db.sessions.size,1);
+  assert.ok(![...db.sessions.keys()].includes(data.adminSession));
+  assert.ok(!JSON.stringify([...db.sessions]).includes(env.PAIRING_KEY));
+  assert.ok(data.expiresAt>Date.now()+89*24*60*60*1000);
+  assert.ok(!JSON.stringify(data).includes(env.PAIRING_KEY));
+});
+test("admin session can create an invite, but Spotify viewer/owner credentials cannot",async()=>{
+  const db=adminDB();
+  const activated=await adminPost(db,"/api/admin/activate",{pairingKey:env.PAIRING_KEY});
+  const {adminSession}=await activated.json();
+  const status=await adminPost(db,"/api/admin/status",{adminSession});
+  assert.equal(status.status,200);
+  assert.equal((await status.json()).active,true);
+  const made=await adminPost(db,"/api/invite/create",{adminSession});
+  assert.equal(made.status,200);
+  assert.match((await made.json()).inviteCode,/^[A-Za-z0-9_-]{32}$/);
+  assert.equal(db.invites.length,1);
+  for(const props of [{ownerKey:"b".repeat(43)},{viewKey:"c".repeat(43)},
+    {adminSession:"d".repeat(43)}]){
+    const denied=await adminPost(db,"/api/invite/create",props);
+    assert.equal(denied.status,403);
+  }
+});
+test("revocation invalidates invite creation and cannot revoke another random session",async()=>{
+  const db=adminDB();
+  const activated=await adminPost(db,"/api/admin/activate",{pairingKey:env.PAIRING_KEY});
+  const {adminSession}=await activated.json();
+  const invalid=await adminPost(db,"/api/admin/revoke",{adminSession:"d".repeat(43)});
+  assert.equal(invalid.status,403);
+  const revoked=await adminPost(db,"/api/admin/revoke",{adminSession});
+  assert.equal(revoked.status,200);
+  assert.deepEqual(await revoked.json(),{revoked:true});
+  assert.equal((await adminPost(db,"/api/admin/status",{adminSession})).status,403);
+  assert.equal((await adminPost(db,"/api/invite/create",{adminSession})).status,403);
+  assert.equal((await adminPost(db,"/api/admin/revoke",{adminSession})).status,403);
+});
+test("expired sessions are rejected even if client continues to hold a token",async()=>{
+  const db=adminDB();
+  const activated=await adminPost(db,"/api/admin/activate",{pairingKey:env.PAIRING_KEY});
+  const {adminSession}=await activated.json();
+  for(const row of db.sessions.values())row.expires_at=Date.now()-1000;
+  assert.equal((await adminPost(db,"/api/admin/status",{adminSession})).status,403);
+  assert.equal((await adminPost(db,"/api/invite/create",{adminSession})).status,403);
+});
+test("missing admin_sessions table returns actionable error, not raw D1 failure",async()=>{
+  const db={prepare(){throw Error("D1_ERROR: no such table: admin_sessions");}};
+  const r=await adminPost(db,"/api/admin/activate",{pairingKey:env.PAIRING_KEY});
+  assert.equal(r.status,503);
+  const data=await r.json();
+  assert.equal(data.error,"admin_sessions_not_ready");
+  assert.match(data.message,/D1/);
+});
+test("admin activation refuses an incorrect pairing key even with a valid Spotify connection",async()=>{
+  const r=await adminPost(adminDB(),"/api/admin/activate",{
+    pairingKey:"wrong",ownerKey:"o".repeat(43),
+  });
+  assert.equal(r.status,403);
+});
