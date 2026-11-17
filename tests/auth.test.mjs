@@ -90,3 +90,26 @@ test('invalid_grant invalidates stored session', async()=>{
   await assert.rejects(()=>auth.accessToken(),/invalid_grant|revoked/);
   assert.equal(auth.hasSession,false);
 });
+
+
+test('OAuth rejects unexpected state and strips authorization code from URL', async()=>{
+  const storage=store(),session=store();
+  storage.setItem(AUTH_KEYS.clientId,client);
+  session.setItem(AUTH_KEYS.verifier,'secret-verifier');
+  session.setItem(AUTH_KEYS.state,'expected');
+  const auth=new SpotifyAuth({redirectUri,storage,session,request:async()=>{throw Error('must not call API')}});
+  let clearedUrl=null;
+  const previousHistory=globalThis.history;
+  globalThis.history={replaceState:(_state,_unused,url)=>{clearedUrl=url}};
+  try {
+    await assert.rejects(
+      ()=>auth.completeRedirect(new URLSearchParams('code=untrusted&state=wrong')),
+      /OAuth state\/PKCE/,
+    );
+    assert.equal(clearedUrl,redirectUri);
+    assert.equal(session.getItem(AUTH_KEYS.verifier),null);
+  } finally {
+    if(previousHistory===undefined) delete globalThis.history;
+    else globalThis.history=previousHistory;
+  }
+});
