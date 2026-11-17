@@ -65,3 +65,58 @@ test('worker fails closed if backend is not configured',async()=>{
   });
   assert.equal(res.status,503);
 });
+
+test('Spotify OAuth starts through Worker with PKCE and no browser refresh token',async()=>{
+  const statements=[];
+  const db={
+    prepare(sql){
+      return {
+        bind(...values){
+          return {run:async()=>{statements.push({sql,values});return {success:true}}};
+        },
+      };
+    },
+  };
+  const req=new Request('https://example.workers.dev/oauth/start',{
+    method:'POST',
+    headers:{Origin:'https://witheroffic.github.io','Content-Type':'application/json'},
+    body:JSON.stringify({pairingKey:env.PAIRING_KEY}),
+  });
+  const res=await worker.fetch(req,{...env,DB:db});
+  assert.equal(res.status,200);
+  const data=await res.json();
+  const url=new URL(data.authorizeUrl);
+  assert.equal(url.origin,'https://accounts.spotify.com');
+  assert.equal(url.searchParams.get('client_id'),env.SPOTIFY_CLIENT_ID);
+  assert.equal(url.searchParams.get('code_challenge_method'),'S256');
+  assert.equal(url.searchParams.get('redirect_uri'),'https://example.workers.dev/oauth/callback');
+  assert.equal(url.searchParams.get('scope'),'user-read-currently-playing');
+  assert.ok(url.searchParams.get('state').length>30);
+  assert.equal(JSON.stringify(data).includes(env.PAIRING_KEY),false);
+  assert.equal(statements.length,1);
+  assert.ok(statements[0].sql.includes('INSERT INTO pending_oauth'));
+  assert.equal(statements[0].values[1].includes('verifier'),false);
+});
+
+test('Spotify OAuth rejects requests without the pairing secret',async()=>{
+  const response=await worker.fetch(new Request('https://example.workers.dev/oauth/start',{
+    method:'POST',headers:{Origin:'https://witheroffic.github.io','Content-Type':'application/json'},
+    body:JSON.stringify({pairingKey:'wrong'}),
+  }),env);
+  assert.equal(response.status,403);
+  assert.equal((await response.json()).error,'unauthorized');
+});
+
+test('an unknown OBS viewer key receives no Spotify credentials',async()=>{
+  const db={
+    prepare(){
+      return {bind(){return {first:async()=>null}}};
+    },
+  };
+  const response=await worker.fetch(new Request('https://example.workers.dev/api/now',{
+    method:'POST',headers:{Origin:'https://witheroffic.github.io','Content-Type':'application/json'},
+    body:JSON.stringify({id:'a'.repeat(24),viewKey:'b'.repeat(43)}),
+  }),{...env,DB:db});
+  assert.equal(response.status,403);
+  assert.equal((await response.json()).error,'invalid_overlay_key');
+});
