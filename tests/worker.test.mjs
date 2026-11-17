@@ -120,3 +120,72 @@ test('an unknown OBS viewer key receives no Spotify credentials',async()=>{
   assert.equal(response.status,403);
   assert.equal((await response.json()).error,'invalid_overlay_key');
 });
+
+test('owner creates one-time invitation without exposing the PAIRING_KEY',async()=>{
+  const records=[];
+  const db={
+    prepare(sql){return {bind(...values){return {run:async()=>{
+      records.push({sql,values});return {success:true};
+    }}}}},
+  };
+  const response=await worker.fetch(new Request('https://example.workers.dev/api/invite/create',{
+    method:'POST',headers:{Origin:'https://witheroffic.github.io','Content-Type':'application/json'},
+    body:JSON.stringify({pairingKey:env.PAIRING_KEY}),
+  }),{...env,DB:db});
+  assert.equal(response.status,200);
+  const result=await response.json();
+  assert.match(result.inviteCode,/^[a-zA-Z0-9_-]{32}$/);
+  assert.ok(result.expiresAt>Date.now());
+  assert.equal(records.length,1);
+  assert.match(records[0].sql,/INSERT INTO invites/);
+  assert.notEqual(records[0].values[0],result.inviteCode);
+  assert.ok(!JSON.stringify(result).includes(env.PAIRING_KEY));
+});
+
+test('friend invitation is consumed atomically and never requires admin key',async()=>{
+  let redeemed=0;
+  let pending=0;
+  const db={prepare(sql){return {bind(...values){
+    if(sql.includes('UPDATE invites'))return {first:async()=>{
+      redeemed++;
+      return {token_hash:'hash'};
+    }};
+    if(sql.includes('INSERT INTO pending_oauth'))return {run:async()=>{
+      pending++;
+      return {success:true};
+    }};
+    throw Error('Unexpected SQL');
+  }}}};
+  const invitation='b'.repeat(32);
+  const response=await worker.fetch(new Request('https://example.workers.dev/oauth/start',{
+    method:'POST',headers:{Origin:'https://witheroffic.github.io','Content-Type':'application/json'},
+    body:JSON.stringify({invite:invitation}),
+  }),{...env,DB:db});
+  assert.equal(response.status,200);
+  const data=await response.json();
+  assert.match(data.authorizeUrl,/accounts\.spotify\.com/);
+  assert.equal(redeemed,1);
+  assert.equal(pending,1);
+});
+
+test('an expired or consumed invitation is rejected',async()=>{
+  const db={prepare(sql){return {bind(){
+    assert.match(sql,/UPDATE invites/);
+    return {first:async()=>null};
+  }}}};
+  const response=await worker.fetch(new Request('https://example.workers.dev/oauth/start',{
+    method:'POST',headers:{Origin:'https://witheroffic.github.io','Content-Type':'application/json'},
+    body:JSON.stringify({invite:'b'.repeat(32)}),
+  }),{...env,DB:db});
+  assert.equal(response.status,403);
+  assert.equal((await response.json()).error,'invalid_invite');
+});
+
+test('public invitation endpoint does not mint invites without pairing key',async()=>{
+  const response=await worker.fetch(new Request('https://example.workers.dev/api/invite/create',{
+    method:'POST',headers:{Origin:'https://witheroffic.github.io','Content-Type':'application/json'},
+    body:JSON.stringify({pairingKey:'bad'}),
+  }),env);
+  assert.equal(response.status,403);
+  assert.equal((await response.json()).error,'unauthorized');
+});
