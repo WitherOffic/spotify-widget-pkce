@@ -4,6 +4,7 @@
  */
 import {progressAt,formatTime,parsePollMs,clamp} from './player-core.js';
 import {createTextTransition} from './src/track-animation.js';
+import {publicThumbnail} from './src/public-artwork.js';
 
 const params=new URLSearchParams(location.search);
 const els={
@@ -37,6 +38,10 @@ let activeTrack=null;
 let previousId=null;
 let sampledAt=performance.now();
 let artworkGeneration=0;
+let coverTask=null;
+let coverRetryAfter=0;
+let latestSong=null;
+const brokenCoverUrls=new Set();
 let visible=false;
 let hideTimer=null;
 let consecutiveErrors=0;
@@ -54,25 +59,66 @@ function show(showIt) {
 }
 function clearArtwork(){
   artworkGeneration++;
+  coverTask=null;
+  coverRetryAfter=0;
+  brokenCoverUrls.clear();
   els.main.classList.remove("has-artwork");
   for(const img of imgs) img.removeAttribute("src");
 }
-async function image(url,trackId){
-  clearArtwork();
-  if(!/^https:\/\/[^\s]+$/i.test(url||"")) return;
-  const id=artworkGeneration;
-  const preload=new Image();
-  const ok=await new Promise(resolve=>{
-    const t=setTimeout(()=>resolve(false),7000);
-    preload.onload=()=>{clearTimeout(t);resolve(true)};
-    preload.onerror=()=>{clearTimeout(t);resolve(false)};
-    preload.src=url;
+const usableCover=url=>/^https:\/\/[^\s]+$/i.test(url||"");
+async function preloadCover(url,trackId,generation) {
+  if(!usableCover(url) || brokenCoverUrls.has(url))return false;
+  const candidate=new Image();
+  const loaded=await new Promise(resolve=>{
+    const timeout=setTimeout(()=>{
+      candidate.onload=null;
+      candidate.onerror=null;
+      resolve(false);
+    },7000);
+    candidate.onload=()=>{clearTimeout(timeout);resolve(true)};
+    candidate.onerror=()=>{clearTimeout(timeout);resolve(false)};
+    candidate.src=url;
   });
-  if(!ok || id!==artworkGeneration || activeTrack?.id!==trackId) return;
-  for(const element of imgs) element.src=url;
+  if(generation!==artworkGeneration || activeTrack?.id!==trackId)return false;
+  if(!loaded){
+    brokenCoverUrls.add(url);
+    console.info("Spotify artwork URL was not loadable in this browser.");
+    return false;
+  }
+  for(const element of imgs)element.src=url;
   els.main.classList.add("has-artwork");
+  return true;
 }
-for(const el of imgs) el.addEventListener("error",()=>clearArtwork());
+async function image(song){
+  if(!song?.id || activeTrack?.id!==song.id ||
+     els.main.classList.contains("has-artwork") ||
+     coverTask?.trackId===song.id || Date.now()<coverRetryAfter)return;
+  const generation=artworkGeneration;
+  const task=(async()=>{
+    if(await preloadCover(song.image,song.id,generation))return;
+    if(generation!==artworkGeneration || activeTrack?.id!==song.id)return;
+    // Public Spotify oEmbed in the browser is a fallback if the Worker was
+    // refused by Spotify or the catalog response lacked album.images.
+    const fallback=await publicThumbnail(song);
+    if(generation!==artworkGeneration || activeTrack?.id!==song.id)return;
+    if(await preloadCover(fallback,song.id,generation))return;
+    if(generation===artworkGeneration && activeTrack?.id===song.id) {
+      coverRetryAfter=Date.now()+60_000;
+      console.info("Spotify cover unavailable; neutral card will be shown.");
+    }
+  })();
+  coverTask={trackId:song.id,promise:task};
+  try{await task}finally{
+    if(coverTask?.promise===task)coverTask=null;
+  }
+}
+for(const element of imgs)element.addEventListener("error",()=>{
+  const src=element.getAttribute("src");
+  if(!src || !latestSong || activeTrack?.id!==latestSong.id)return;
+  clearArtwork();
+  brokenCoverUrls.add(src);
+  void image(latestSong);
+});
 function tick(){
   if(!activeTrack)return;
   const position=progressAt(activeTrack,performance.now()-sampledAt);
@@ -82,6 +128,7 @@ function tick(){
 }
 function render(song){
   if(!song?.playing){
+    latestSong=null;
     activeTrack=null;
     previousId=null;
     textEffect.cancel();
@@ -91,6 +138,7 @@ function render(song){
     return;
   }
   const changed=song.id!==previousId;
+  latestSong=song;
   activeTrack={
     id:song.id,
     progressMs:Math.max(0,Number(song.progressMs)||0),
@@ -101,10 +149,9 @@ function render(song){
     const wasPrevious=Boolean(previousId);
     previousId=song.id;
     textEffect.animate(String(song.title||""),String(song.artist||""),wasPrevious);
-    void image(song.image,song.id);
-  } else if(song.image && !els.main.classList.contains("has-artwork")) {
-    void image(song.image,song.id);
+    clearArtwork();
   }
+  void image(song);
   els.source.href=/^https:\/\/open\.spotify\.com\//.test(song.spotifyUrl||"")
     ?song.spotifyUrl:"https://open.spotify.com/";
   tick();
