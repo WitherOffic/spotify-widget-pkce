@@ -156,8 +156,13 @@ async function run(){
       const data=await requestSong();
       consecutiveErrors=0;
       if(data && data.playing!==undefined){
+        const wasStatusVisible=!els.status.hidden;
         els.status.hidden=true;
-        render(data);
+        // Repeated stale Spotify data must not rewind the local progress timer.
+        if(!(data.stale && activeTrack && data.id===activeTrack.id)) {
+          if(wasStatusVisible && activeTrack && duration===0) show(true);
+          render(data);
+        }
       }
     }catch(error){
       consecutiveErrors++;
