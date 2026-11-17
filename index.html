@@ -4,6 +4,7 @@
   <meta charset="utf-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1"/>
   <meta name="referrer" content="no-referrer"/>
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https: data:; connect-src https:; frame-src 'self'; base-uri 'none'; form-action 'none'; object-src 'none'"/>
   <meta name="theme-color" content="#10151b"/>
   <title>Wither Spotify Widget — Панель стримера</title>
   <link rel="stylesheet" href="./dashboard.css"/>
@@ -110,6 +111,25 @@
       <div id="setupStatus" class="status" hidden role="status" aria-live="polite"></div>
     </section>
 
+    <section class="card" id="adminAccessArea" hidden>
+      <div class="section-head">
+        <div><div class="kicker">ТОЛЬКО ДЛЯ ВЛАДЕЛЬЦА CLOUDFLARE</div><h2>Включить управление приглашениями</h2></div>
+        <span class="tag">Один раз на этом браузере</span>
+      </div>
+      <p>Войди в режим владельца один раз с помощью PAIRING_KEY. Сайт сохранит только ограниченный ключ доступа для приглашений на 90 дней. Твой PAIRING_KEY в браузере не сохраняется.</p>
+      <details id="adminAccessPanel">
+        <summary>Я владелец сервера — подтвердить права</summary>
+        <div class="field">
+          <label for="adminLoginKey">PAIRING_KEY из Cloudflare</label>
+          <input id="adminLoginKey" type="password" autocomplete="off" spellcheck="false" placeholder="Введи секрет один раз"/>
+        </div>
+        <div class="controls">
+          <button id="enableAdmin" type="button" class="primary">Запомнить этот браузер</button>
+        </div>
+      </details>
+      <div id="adminStatus" class="status" hidden role="status" aria-live="polite"></div>
+    </section>
+
     <section class="card" id="friendsCard" hidden>
       <div class="section-head">
         <div><div class="kicker">ДЛЯ ВЛАДЕЛЬЦА</div><h2>Пригласить друга</h2></div>
@@ -117,13 +137,10 @@
       </div>
       <p>Создай приглашение, которое действует 48 часов. Друг подключит свой Spotify и получит отдельный OBS-оверлей. Главный ключ ему не нужен.</p>
       <p class="tip">Перед приглашением добавь Spotify-аккаунт друга в <a href="https://developer.spotify.com/dashboard" target="_blank" rel="noopener noreferrer">User Management</a> своего приложения. В Development Mode число разрешённых пользователей ограничено Spotify.</p>
-      <div class="field">
-        <label for="adminPairingKey">Ключ владельца Cloudflare</label>
-        <input id="adminPairingKey" type="password" autocomplete="off" placeholder="PAIRING_KEY (не сохраняется на сайте)"/>
-      </div>
       <div class="controls">
-        <button id="createInvite" type="button" class="secondary">Создать приглашение</button>
+        <button id="createInvite" type="button" class="primary">Создать приглашение без PAIRING_KEY</button>
       </div>
+      <p class="help" id="adminExpiry">Доступ владельца действует только в этом браузере.</p>
       <div id="inviteResult" hidden>
         <label for="inviteLink">Отправь ссылку другу в личных сообщениях</label>
         <div class="copy-field">
@@ -132,6 +149,10 @@
         </div>
       </div>
       <div id="inviteStatus" class="status" hidden role="status" aria-live="polite"></div>
+      <div class="controls">
+        <button id="revokeAdmin" type="button" class="secondary">Отозвать доступ этого браузера</button>
+      </div>
+      <p class="help">Если на компьютере есть посторонние пользователи, лучше отозвать доступ после создания приглашений.</p>
     </section>
 
     <section class="card actions-card" id="accountCard" hidden>
