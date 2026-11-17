@@ -1,0 +1,10 @@
+{
+  "name": "nutty-spotify-widget-pkce",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Static Spotify PKCE widget for OBS; GPL-3.0-or-later",
+  "scripts": {
+    "test": "node --test tests/core.test.mjs && node --experimental-vm-modules --test tests/widget_vm.test.mjs"
+  }
+}
