@@ -9,6 +9,8 @@ const CURRENT_ENDPOINT = "https://api.spotify.com/v1/me/player/currently-playing
 const AUTH_ENDPOINT = "https://accounts.spotify.com/authorize";
 const NOW_CACHE_MS = 2800;
 const LOCK_MS = 20000;
+const ADMIN_SESSION_MS = 90 * 24 * 60 * 60 * 1000; // 90 days, invitation creation only
+const VALID_ADMIN_SESSION = /^[A-Za-z0-9_-]{43}$/;
 const VALID_ID = /^[A-Za-z0-9_-]{16,48}$/;
 const HEADERS = {
   "Content-Type": "application/json; charset=utf-8",
@@ -98,9 +100,53 @@ async function checkAdminKey(env, value) {
   if (typeof value!=="string" || value.length<24 || !env.PAIRING_KEY) return false;
   return await sha256(value)===await sha256(env.PAIRING_KEY);
 }
+function isMissingAdminTable(error) {
+  return /no such table: admin_sessions|table admin_sessions does not exist/i.test(error?.message||"");
+}
+// This deliberately grants only invite creation. The raw PAIRING_KEY is never stored
+// in localStorage, the session key only exists client-side, and D1 stores its hash.
+async function checkAdminSession(env, token) {
+  if(typeof token!=="string" || !VALID_ADMIN_SESSION.test(token))return null;
+  const row=await env.DB.prepare(
+    "SELECT expires_at,revoked_at FROM admin_sessions WHERE token_hash=?"
+  ).bind(await sha256(token)).first();
+  if(!row || row.revoked_at!==null && row.revoked_at!==undefined || Number(row.expires_at)<=Date.now())return null;
+  return row;
+}
+async function activateAdmin(req,env) {
+  const body=await bodyJson(req);
+  if(!await checkAdminKey(env,body.pairingKey)) {
+    return json({error:"unauthorized",message:"Неверный PAIRING_KEY владельца."},403,env);
+  }
+  const token=randomUrl(32), now=Date.now(), expiresAt=now+ADMIN_SESSION_MS;
+  await env.DB.prepare(
+    "INSERT INTO admin_sessions (token_hash,created_at,expires_at) VALUES (?,?,?)"
+  ).bind(await sha256(token),now,expiresAt).run();
+  return json({adminSession:token,expiresAt},200,env);
+}
+async function adminStatus(req,env) {
+  const body=await bodyJson(req);
+  const row=await checkAdminSession(env,body.adminSession);
+  if(!row)return json({error:"admin_session_expired",message:"Доступ владельца недействителен. Подтверди его повторно."},403,env);
+  return json({active:true,expiresAt:row.expires_at},200,env);
+}
+async function revokeAdmin(req,env) {
+  const body=await bodyJson(req);
+  const token=body.adminSession;
+  if(typeof token!=="string" || !VALID_ADMIN_SESSION.test(token)) {
+    return json({error:"unauthorized"},403,env);
+  }
+  const revoked=await env.DB.prepare(
+    "UPDATE admin_sessions SET revoked_at=? WHERE token_hash=? AND revoked_at IS NULL AND expires_at>? RETURNING token_hash"
+  ).bind(Date.now(),await sha256(token),Date.now()).first();
+  if(!revoked)return json({error:"admin_session_expired"},403,env);
+  return json({revoked:true},200,env);
+}
 async function createInvite(req,env) {
   const body=await bodyJson(req);
-  if (!await checkAdminKey(env,body.pairingKey)) return json({error:"unauthorized"},403,env);
+  if (!await checkAdminKey(env,body.pairingKey) && !await checkAdminSession(env,body.adminSession)) {
+    return json({error:"unauthorized",message:"Для приглашения нужен действующий доступ владельца."},403,env);
+  }
   const code=randomUrl(24);
   const expiresAt=Date.now()+48*60*60*1000;
   try {
@@ -345,12 +391,18 @@ export default {
     try {
       if(url.pathname==="/oauth/start") return await connectStart(request,env);
       if(url.pathname==="/api/invite/create") return await createInvite(request,env);
+      if(url.pathname==="/api/admin/activate") return await activateAdmin(request,env);
+      if(url.pathname==="/api/admin/status") return await adminStatus(request,env);
+      if(url.pathname==="/api/admin/revoke") return await revokeAdmin(request,env);
       if(url.pathname==="/api/now") return await now(request,env);
       if(["/api/owner","/api/revoke","/api/rotate"].includes(url.pathname)) {
         return await ownerAction(request,env,url.pathname);
       }
       return json({error:"not_found"},404,env);
     } catch(error) {
+      if(isMissingAdminTable(error)) {
+        return json({error:"admin_sessions_not_ready",message:"Не настроена таблица admin_sessions в Cloudflare D1. Открой инструкцию проекта."},503,env);
+      }
       return json(safeError(error),500,env);
     }
   },
