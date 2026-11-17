@@ -109,8 +109,10 @@ export function createArtworkController({
     if (item?.is_local || isRateLimited()) return false;
     const saved = cache.get(id);
     if (saved && Date.now()-saved.checkedAt < COVER_RETRY_MS) {
-      if (saved.url) return useUrl(id,saved.url,attempt);
-      return false;
+      if (!saved.url) return false;
+      if (!bad.has(saved.url) && await useUrl(id,saved.url,attempt)) return true;
+      // A cached cover may become inaccessible. Try alternative sources rather
+      // than repeatedly retrying the broken URL for the entire cache lifetime.
     }
     const possible = [];
     const publicImage = await oembed(item);
