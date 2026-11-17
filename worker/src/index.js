@@ -330,3 +330,6 @@ export default {
     }
   },
 };
+
+// Export selected pure helpers for regression tests without exposing secrets.
+export {projectCurrent,seal,unseal};
