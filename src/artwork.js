@@ -114,24 +114,26 @@ export function createArtworkController({
       // A cached cover may become inaccessible. Try alternative sources rather
       // than repeatedly retrying the broken URL for the entire cache lifetime.
     }
-    const possible = [];
-    const publicImage = await oembed(item);
-    if (publicImage) possible.push(publicImage);
+    // Try sources one at a time: stop as soon as an image loads.
+    // This avoids unnecessary Spotify catalog requests on every new song.
+    async function apply(url) {
+      if (!url || bad.has(url)) return false;
+      if (!await useUrl(id,url,attempt)) return false;
+      cache.set(id,{url,checkedAt:Date.now()});
+      trim();
+      return true;
+    }
+    if (await apply(await oembed(item))) return true;
+    if (trackId !== id || seq !== attempt || isRateLimited()) return false;
+
     const album = await catalog('albums',spotifyItemId(item?.album));
-    const fromAlbum = firstImageUrl(album,bad);
-    if (fromAlbum) possible.push(fromAlbum);
+    if (await apply(firstImageUrl(album,bad))) return true;
+    if (trackId !== id || seq !== attempt || isRateLimited()) return false;
+
     const type = item?.type === 'episode' ? 'episodes' : 'tracks';
     const fullTrack = await catalog(type,spotifyItemId(item));
-    const fromTrack = firstImageUrl(fullTrack,bad);
-    if (fromTrack) possible.push(fromTrack);
-    for (const url of new Set(possible)) {
-      if (await useUrl(id,url,attempt)) {
-        cache.set(id,{url,checkedAt:Date.now()});
-        trim();
-        return true;
-      }
-      if (trackId !== id || seq !== attempt) return false;
-    }
+    if (await apply(firstImageUrl(fullTrack,bad))) return true;
+    if (trackId !== id || seq !== attempt) return false;
     cache.set(id,{url:null,checkedAt:Date.now()});
     trim();
     return false;
