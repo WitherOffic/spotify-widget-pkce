@@ -80,6 +80,8 @@ let wasPlaying = false;
 let currentVisible = false;
 let displayedArtwork = null;
 let artworkLoadId = 0;
+let pendingArtwork = null;
+let currentItem = null;
 const brokenArtwork = new Set();
 const artworkCache = new Map();
 const ARTWORK_RETRY_MS = 60000;
@@ -107,6 +109,7 @@ function hideTrack() {
   lastTrackId = null;
   wasPlaying = false;
   displayedArtwork = null;
+  currentItem = null;
   clearArtwork();
   setVisibility(false);
 }
@@ -131,6 +134,7 @@ function updateText(el, value) {
 // Verify image URLs before attaching them to the visible DOM.
 function clearArtwork() {
   artworkLoadId++;
+  pendingArtwork = null;
   displayedArtwork = null;
   els.main.classList.remove('has-artwork');
   for (const img of [els.art, els.artBack, els.bg, els.bgBack]) {
@@ -140,14 +144,20 @@ function clearArtwork() {
 async function showArtwork(url, trackId, item) {
   if (!/^https:\/\/[^\s]+$/i.test(url || '') || brokenArtwork.has(url)) return false;
   if (displayedArtwork === url && els.main.classList.contains('has-artwork')) return true;
+  if (pendingArtwork?.url === url && pendingArtwork.trackId === trackId) {
+    return pendingArtwork.promise;
+  }
   const requestId = ++artworkLoadId;
-  const ok = await new Promise(resolve => {
+  const preloader = new Promise(resolve => {
     const candidate = new Image();
     const timer = setTimeout(() => { candidate.onload = null; candidate.onerror = null; resolve(false); }, 8000);
     candidate.onload = () => { clearTimeout(timer); resolve(true); };
     candidate.onerror = () => { clearTimeout(timer); resolve(false); };
     candidate.src = url;
   });
+  pendingArtwork = { url, trackId, promise: preloader };
+  const ok = await preloader;
+  if (pendingArtwork?.promise === preloader) pendingArtwork = null;
   if (!currentTrack || currentTrack.id !== trackId || requestId !== artworkLoadId) return false;
   if (!ok) {
     brokenArtwork.add(url);
@@ -233,13 +243,12 @@ async function lookupArtwork(item) {
 }
 async function ensureArtwork(trackId, item) {
   const cached = artworkCache.get(trackId);
-  if (cached && (cached.pending || (cached.url && !brokenArtwork.has(cached.url)) ||
-       Date.now() - cached.checkedAt < ARTWORK_RETRY_MS)) {
-    if (cached.url && !brokenArtwork.has(cached.url) && currentTrack?.id === trackId) {
-      void showArtwork(cached.url, trackId, item);
-    }
+  if (cached?.pending) return;
+  if (cached?.url && !brokenArtwork.has(cached.url)) {
+    if (currentTrack?.id === trackId) void showArtwork(cached.url, trackId, item);
     return;
   }
+  if (cached && !cached.url && Date.now() - cached.checkedAt < ARTWORK_RETRY_MS) return;
   artworkCache.set(trackId, { pending: true, url: null, checkedAt: Date.now() });
   try {
     const url = await lookupArtwork(item);
@@ -265,6 +274,7 @@ function renderPlaying(data, responseRoundTripMs = 0) {
   if (!track) { hideTrack(); return; }
   const newTrack = track.id !== lastTrackId;
   currentTrack = track;
+  currentItem = data.item;
   // Resynchronize on every API response, correcting drift and seeking.
   // Half the measured round trip approximates the age of the returned snapshot.
   trackSampledAt = performance.now() - Math.min(Math.max(responseRoundTripMs / 2, 0), 750);
@@ -526,6 +536,16 @@ async function start() {
   els.main.style.opacity = '0';
   ticker = setInterval(drawProgress, 250);
   clearArtwork(); // Empty, neutral state until a real cover has loaded.
+  for (const img of [els.art, els.artBack, els.bg, els.bgBack]) {
+    img.addEventListener('error', () => {
+      if (!displayedArtwork) return;
+      brokenArtwork.add(displayedArtwork);
+      const id = currentTrack?.id;
+      const item = currentItem;
+      clearArtwork();
+      if (id && item) void ensureArtwork(id, item);
+    });
+  }
 
   if (params.get('demo') === '1') {
     renderPlaying({ is_playing: true, progress_ms: 29000, currently_playing_type: 'track', item: {
