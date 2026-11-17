@@ -5,12 +5,15 @@
  */
 const SETTINGS_KEY="wither-spotify-dashboard-settings";
 const ACCOUNT_KEY="wither-spotify-overlay-connection";
+const ADMIN_KEY="wither-spotify-admin-session";
 const byId=id=>document.getElementById(id);
 const workerInput=byId("workerUrl");
 const pairingInput=byId("pairingKey");
 const setupArea=byId("setup");
 const connectionArea=byId("connected");
 const friendsArea=byId("friendsCard");
+const adminAccessArea=byId("adminAccessArea");
+const adminStatus=byId("adminStatus");
 const accountArea=byId("accountCard");
 const linkInput=byId("overlayLink");
 const setupStatus=byId("setupStatus");
@@ -51,6 +54,9 @@ function validConnection(c){
 let connection=load(ACCOUNT_KEY);
 let activeInvite=null;
 let generatedInvite="";
+let adminSession=load(ADMIN_KEY);
+let adminVerified=false;
+let checkingAdmin=Boolean(adminSession?.token);
 const previousSettings=load(SETTINGS_KEY)||{};
 workerInput.value=connection?.worker||previousSettings.worker||"";
 options.poll.value=previousSettings.poll||"3000";
@@ -81,8 +87,11 @@ function overlayURL(){
 }
 function paint(){
   const connected=Boolean(validConnection(connection));
+  const authorized=connected && adminVerified &&
+    adminSession?.worker===connection.worker;
   connectionArea.hidden=!connected;
-  friendsArea.hidden=!connected;
+  friendsArea.hidden=!authorized;
+  adminAccessArea.hidden=!connected || authorized || checkingAdmin;
   accountArea.hidden=!connected;
   setupArea.hidden=connected && !activeInvite;
   if(connected) linkInput.value=overlayURL();
@@ -97,7 +106,11 @@ async function post(api,path,payload){
     referrerPolicy:"no-referrer",
   });
   const data=await response.json().catch(()=>({}));
-  if(!response.ok)throw Error(data.message||data.error||("HTTP "+response.status));
+  if(!response.ok){
+    const error=new Error(data.message||data.error||("HTTP "+response.status));
+    error.status=response.status;
+    throw error;
+  }
   return data;
 }
 async function checkWorker(){
@@ -197,11 +210,95 @@ async function copyLink(){
   await copy(overlayURL(),linkInput);
   notice(linkStatus,"Ссылка скопирована. В OBS используй источник «Браузер», 550 × 160.");
 }
+function clearAdminSession(){
+  adminSession=null;
+  adminVerified=false;
+  localStorage.removeItem(ADMIN_KEY);
+  paint();
+}
+function showAdminExpiry(expiresAt){
+  const date=new Date(expiresAt);
+  byId("adminExpiry").textContent=Number.isFinite(date.getTime())
+    ? "Режим владельца действует до "+date.toLocaleDateString("ru-RU")+
+      ". Только приглашения; Spotify и настройки Worker изменить нельзя."
+    : "Административный доступ активен только для создания приглашений.";
+}
+async function activateAdmin(){
+  if(!validConnection(connection))throw Error("Сначала подключи свой Spotify.");
+  const field=byId("adminLoginKey");
+  const key=field.value.trim();
+  if(key.length<24)throw Error("Нужен PAIRING_KEY из Cloudflare.");
+  try{
+    const value=await post(connection.worker,"/api/admin/activate",{pairingKey:key});
+    if(!/^[A-Za-z0-9_-]{43}$/.test(value.adminSession||"") ||
+      !Number.isFinite(Number(value.expiresAt))){
+      throw Error("Worker вернул недействительный ключ владельца.");
+    }
+    // The pairing key is never saved. Only a scoped, revocable credential
+    // restricted to invitation creation persists in this browser.
+    adminSession={worker:connection.worker,token:value.adminSession,expiresAt:value.expiresAt};
+    save(ADMIN_KEY,adminSession);
+    adminVerified=true;
+    checkingAdmin=false;
+    showAdminExpiry(value.expiresAt);
+    paint();
+    notice(inviteStatus,"Режим владельца активирован. Приглашения можно создавать без PAIRING_KEY.");
+  }finally{
+    field.value="";
+  }
+}
+async function checkAdmin(){
+  if(!adminSession?.token || !validConnection(connection) ||
+    adminSession.worker!==connection.worker){
+    checkingAdmin=false;
+    adminVerified=false;
+    paint();
+    return;
+  }
+  checkingAdmin=true;
+  paint();
+  try{
+    const result=await post(connection.worker,"/api/admin/status",{
+      adminSession:adminSession.token,
+    });
+    if(result.active!==true)throw Error("Сеанс владельца недействителен.");
+    adminVerified=true;
+    showAdminExpiry(result.expiresAt);
+  }catch(error){
+    adminVerified=false;
+    if(error.status===403){
+      clearAdminSession();
+      notice(adminStatus,"Срок действия режима владельца истёк. Подтверди права ещё раз.");
+    }else{
+      notice(adminStatus,"Не удалось проверить права владельца: "+error.message,true);
+    }
+  }finally{
+    checkingAdmin=false;
+    paint();
+  }
+}
+async function revokeAdmin(){
+  if(!adminVerified || !adminSession?.token)return;
+  if(!confirm("Отозвать управление приглашениями для этого браузера? OBS-ссылка продолжит работать."))return;
+  await post(adminSession.worker,"/api/admin/revoke",{adminSession:adminSession.token});
+  clearAdminSession();
+  notice(adminStatus,"Административный доступ отозван. Spotify и OBS продолжают работать.");
+}
 async function createInvite(){
-  if(!validConnection(connection))throw Error("Сначала подключи собственный Spotify.");
-  const key=byId("adminPairingKey").value.trim();
-  if(key.length<24)throw Error("Введи свой PAIRING_KEY из Cloudflare.");
-  const result=await post(connection.worker,"/api/invite/create",{pairingKey:key});
+  if(!validConnection(connection) || !adminVerified || !adminSession?.token ||
+    adminSession.worker!==connection.worker)throw Error("Сначала включи права владельца.");
+  let result;
+  try{
+    result=await post(connection.worker,"/api/invite/create",{
+      adminSession:adminSession.token,
+    });
+  }catch(error){
+    if(error.status===403){
+      clearAdminSession();
+      notice(adminStatus,"Доступ владельца закончился. Включи его повторно.",true);
+    }
+    throw error;
+  }
   if(!/^[a-zA-Z0-9_-]{32}$/.test(result.inviteCode||""))throw Error("Worker вернул некорректный код.");
   const url=new URL("./index.html",location.href);
   url.search="";
@@ -209,7 +306,6 @@ async function createInvite(){
   generatedInvite=url.toString();
   byId("inviteLink").value=generatedInvite;
   byId("inviteResult").hidden=false;
-  byId("adminPairingKey").value="";
   notice(inviteStatus,"Приглашение создано. Действует 48 часов и может быть использовано один раз.");
 }
 async function copyInvite(){
@@ -256,6 +352,8 @@ byId("toggleLink").addEventListener("click",()=>{
   linkInput.type=reveal?"text":"password";
   byId("toggleLink").textContent=reveal?"Скрыть":"Показать";
 });
+byId("enableAdmin").addEventListener("click",withStatus(activateAdmin,adminStatus));
+byId("revokeAdmin").addEventListener("click",withStatus(revokeAdmin,inviteStatus));
 byId("createInvite").addEventListener("click",withStatus(createInvite,inviteStatus));
 byId("copyInvite").addEventListener("click",withStatus(copyInvite,inviteStatus));
 byId("rotateLink").addEventListener("click",withStatus(rotateLink,linkStatus));
@@ -267,3 +365,4 @@ consumeOAuthReturn();
 consumeFriendInvite();
 paint();
 void checkConnection();
+void checkAdmin();
