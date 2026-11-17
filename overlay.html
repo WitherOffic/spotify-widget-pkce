@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <meta name="referrer" content="no-referrer" />
+  <title>Wither Spotify Widget — Overlay</title>
+  <link rel="stylesheet" href="./style.css" />
+  <link rel="stylesheet" href="./overlay.css" />
+</head>
+<body>
+  <main id="mainContainer" aria-live="polite">
+    <div id="albumArtBox">
+      <img id="albumArt" alt="Обложка трека" />
+      <img id="albumArtBack" alt="" aria-hidden="true" />
+    </div>
+    <div id="songInfoBox">
+      <div id="songInfo">
+        <div id="IAmRunningOutOfNamesForTheseBoxes">
+          <div id="trackTextViewport">
+            <div id="trackText">
+              <div id="songLabel">Spotify</div>
+              <div id="artistLabel">Ожидаем музыку</div>
+            </div>
+          </div>
+          <div id="times">
+            <div id="progressTime">0:00</div>
+            <div id="timeRemaining">-0:00</div>
+          </div>
+          <div id="progressBg"><div id="progressBar"></div></div>
+        </div>
+        <a id="spotifyAttribution" href="https://open.spotify.com/" target="_blank" rel="noopener noreferrer">Spotify</a>
+      </div>
+      <div id="backgroundArt">
+        <img id="backgroundImage" alt="" aria-hidden="true" />
+        <img id="backgroundImageBack" alt="" aria-hidden="true" />
+      </div>
+    </div>
+  </main>
+  <section id="overlayStatus" hidden></section>
+  <script type="module" src="./overlay.js"></script>
+</body>
+</html>
