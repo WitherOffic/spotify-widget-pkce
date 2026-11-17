@@ -113,3 +113,35 @@ test('OAuth rejects unexpected state and strips authorization code from URL', as
     else globalThis.history=previousHistory;
   }
 });
+
+test('default browser fetch retains the global Window-like receiver', async () => {
+  const originalFetch = globalThis.fetch;
+  const storage = store();
+  const seen = [];
+  globalThis.fetch = async function (url, opts) {
+    if (this !== globalThis) throw new TypeError("Illegal invocation");
+    seen.push({url,opts});
+    if (url === 'https://accounts.spotify.com/api/token') {
+      return {
+        ok:true,
+        json:async()=>({access_token:'restored-access-token',expires_in:3600}),
+      };
+    }
+    return {status:200,ok:true};
+  };
+  try {
+    // Omit custom request on purpose to exercise browser default injection.
+    const auth = new SpotifyAuth({redirectUri,storage,session:store()});
+    auth.importConnection(JSON.stringify({version:1,client_id:client,refresh_token:refresh}));
+    const response = await auth.authorizedFetch(
+      'https://api.spotify.com/v1/me/player/currently-playing'
+    );
+    assert.equal(response.status,200);
+    assert.equal(seen.length,2);
+    assert.equal(seen[0].url,'https://accounts.spotify.com/api/token');
+    assert.equal(seen[1].opts.headers.Authorization,'Bearer restored-access-token');
+  } finally {
+    if (originalFetch === undefined) delete globalThis.fetch;
+    else globalThis.fetch = originalFetch;
+  }
+});
