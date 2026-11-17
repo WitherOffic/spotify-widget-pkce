@@ -31,7 +31,9 @@ export class SpotifyAuth {
     redirectUri,
     storage = localStorage,
     session = sessionStorage,
-    request = fetch,
+    // Call fetch as a method of the global object: browsers require the Window receiver.
+    // Passing an unbound window.fetch triggers TypeError: Illegal invocation.
+    request = (...args) => globalThis.fetch(...args),
   }) {
     this.redirectUri = redirectUri;
     this.storage = storage;
