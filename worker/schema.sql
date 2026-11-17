@@ -23,3 +23,11 @@ CREATE TABLE IF NOT EXISTS art_cache (
   url TEXT,
   checked_at INTEGER NOT NULL
 );
+
+-- One-use, expiring friend invitations. Only token hashes are stored.
+CREATE TABLE IF NOT EXISTS invites (
+  token_hash TEXT PRIMARY KEY,
+  created_at INTEGER NOT NULL,
+  expires_at INTEGER NOT NULL,
+  used_at INTEGER
+);
