@@ -10,19 +10,11 @@ import {
 } from './player-core.js';
 import { createTextTransition } from './src/track-animation.js';
 import { createArtworkController } from './src/artwork.js';
+import { SpotifyAuth } from './src/spotify-auth.js';
 
 const params = new URLSearchParams(window.location.search);
-const KEYS = {
-  clientId: 'nutty-pkce-v1-client-id',
-  tokens: 'nutty-pkce-v1-tokens',
-  verifier: 'nutty-pkce-v1-verifier',
-  state: 'nutty-pkce-v1-state',
-  options: 'nutty-pkce-v1-options',
-};
-const API_CURRENT = 'https://api.spotify.com/v1/me/player/currently-playing';
-const TOKEN_ENDPOINT = 'https://accounts.spotify.com/api/token';
-const OAUTH_ENDPOINT = 'https://accounts.spotify.com/authorize';
-const SCOPE = 'user-read-currently-playing';
+const OPTIONS_KEY='nutty-pkce-v1-options'; // Preserve existing browser configuration.
+const API_CURRENT='https://api.spotify.com/v1/me/player/currently-playing';
 const defaultRedirect = new URL('./index.html', window.location.href);
 defaultRedirect.search = '';
 defaultRedirect.hash = '';
@@ -51,12 +43,13 @@ const els = {
   elapsed: document.getElementById('progressTime'),
   remaining: document.getElementById('timeRemaining'),
 };
+const auth = new SpotifyAuth({redirectUri});
 const configId = params.get('client_id')?.trim() || '';
-if (configId) localStorage.setItem(KEYS.clientId, configId);
-let clientId = configId || localStorage.getItem(KEYS.clientId) || '';
+if (/^[a-zA-Z0-9]{16,64}$/.test(configId)) auth.setClientId(configId);
+let clientId = auth.clientId;
 // Preserve options across the OAuth redirect, which returns only ?code=...&state=....
 let storedOptions = {};
-try { storedOptions = JSON.parse(localStorage.getItem(KEYS.options) || '{}') || {}; }
+try { storedOptions = JSON.parse(localStorage.getItem(OPTIONS_KEY) || '{}') || {}; }
 catch { storedOptions = {}; }
 const isOAuthCallback = params.has('code') || params.has('error');
 const options = isOAuthCallback ? storedOptions : {
@@ -65,13 +58,11 @@ const options = isOAuthCallback ? storedOptions : {
   hideAlbumArt: params.has('hideAlbumArt'),
   settings: params.get('settings') === '1',
 };
-if (!isOAuthCallback && params.get('demo') !== '1') localStorage.setItem(KEYS.options, JSON.stringify(options));
+if (!isOAuthCallback && params.get('demo') !== '1') localStorage.setItem(OPTIONS_KEY, JSON.stringify(options));
 const pollMs = parsePollMs(options.poll);
 const visibilityDuration = clamp(Number(options.duration) || 0, 0, 3600) * 1000;
 const hideAlbumArt = !!options.hideAlbumArt;
 const debug = !!options.settings;
-let tokens = safeReadTokens();
-let refreshPromise = null;
 let active = false;
 let pollTimer = null;
 let visibilityTimer = null;
@@ -159,132 +150,17 @@ function renderPlaying(data, responseRoundTripMs = 0) {
   if (newTrack || !wasPlaying) revealForTrack();
   wasPlaying = true;
 }
-function safeReadTokens() {
-  try { return JSON.parse(localStorage.getItem(KEYS.tokens) || 'null'); }
-  catch { return null; }
-}
-function saveTokens(incoming) {
-  if (!incoming?.access_token || !Number.isFinite(Number(incoming.expires_in))) {
-    throw new Error('Spotify прислал некорректный ответ при обновлении токена.');
-  }
-  const refresh = incoming.refresh_token || tokens?.refresh_token;
-  if (!refresh) throw new Error('В ответе Spotify отсутствует refresh_token. Повтори авторизацию.');
-  tokens = {
-    access_token: incoming.access_token,
-    refresh_token: refresh,
-    expires_at: Date.now() + Number(incoming.expires_in) * 1000,
-  };
-  localStorage.setItem(KEYS.tokens, JSON.stringify(tokens));
-}
-function discardTokens() {
-  tokens = null;
-  localStorage.removeItem(KEYS.tokens);
-}
-async function requestToken(body) {
-  const response = await fetch(TOKEN_ENDPOINT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams(body),
-    cache: 'no-store',
-  });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const reason = result.error_description || result.error || response.statusText;
-    const error = new Error(`Spotify OAuth (${response.status}): ${reason}`);
-    error.code = result.error;
-    throw error;
-  }
-  return result;
-}
-function randomBase64Url(bytes = 32) {
-  const values = crypto.getRandomValues(new Uint8Array(bytes));
-  return btoa(String.fromCharCode(...values))
-    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-}
-async function pkceChallenge(verifier) {
-  const bytes = new TextEncoder().encode(verifier);
-  const hash = await crypto.subtle.digest('SHA-256', bytes);
-  return btoa(String.fromCharCode(...new Uint8Array(hash)))
-    .replace(/=/g, '').replace(/\+/g, '-').replace(/\//g, '_');
-}
 async function connectSpotify() {
   clientId = els.clientInput.value.trim();
-  if (!/^[a-zA-Z0-9]{16,64}$/.test(clientId)) {
-    showStatus('Вставь корректный Spotify Client ID из Developer Dashboard (не Client Secret).');
-    return;
-  }
-  if (!window.isSecureContext || !crypto?.subtle) {
-    showStatus('OAuth PKCE требует HTTPS. Опубликуй файлы через GitHub Pages/другой HTTPS-хостинг. file:// не подходит.');
-    return;
-  }
-  localStorage.setItem(KEYS.clientId, clientId);
-  const verifier = randomBase64Url(64);
-  const state = randomBase64Url(32);
-  sessionStorage.setItem(KEYS.verifier, verifier);
-  sessionStorage.setItem(KEYS.state, state);
-  const challenge = await pkceChallenge(verifier);
-  const url = new URL(OAUTH_ENDPOINT);
-  url.search = new URLSearchParams({
-    response_type: 'code', client_id: clientId,
-    scope: SCOPE, redirect_uri: redirectUri,
-    state, code_challenge_method: 'S256', code_challenge: challenge,
-  }).toString();
-  window.location.assign(url.toString()); // same tab: required by OBS Interact
+  return auth.startConnect(clientId);
 }
 async function processOAuthCallback() {
-  if (!params.has('code') && !params.has('error')) return false;
-  const expectedState = sessionStorage.getItem(KEYS.state);
-  const codeVerifier = sessionStorage.getItem(KEYS.verifier);
-  const receivedState = params.get('state');
-  // Clear sensitive authorization code out of address bar/history promptly.
-  history.replaceState(null, '', redirectUri);
-  sessionStorage.removeItem(KEYS.state);
-  sessionStorage.removeItem(KEYS.verifier);
-  if (!receivedState || !expectedState || receivedState !== expectedState || !codeVerifier) {
-    throw new Error('OAuth state/PKCE не совпал. Повтори подключение в том же источнике OBS.');
-  }
-  if (params.has('error')) throw new Error(`Spotify отказал в доступе: ${params.get('error')}`);
-  if (!clientId) throw new Error('Client ID отсутствует после Spotify OAuth. Повтори подключение.');
-  const answer = await requestToken({
-    grant_type: 'authorization_code', code: params.get('code'),
-    redirect_uri: redirectUri, client_id: clientId, code_verifier: codeVerifier,
-  });
-  saveTokens(answer);
-  return true;
-}
-async function refreshAccessToken() {
-  if (!tokens?.refresh_token) throw new Error('Нет refresh token; нужно подключить Spotify заново.');
-  if (refreshPromise) return refreshPromise;
-  refreshPromise = (async () => {
-    try {
-      const answer = await requestToken({
-        grant_type: 'refresh_token', refresh_token: tokens.refresh_token,
-        client_id: clientId,
-      });
-      saveTokens(answer); // supports rotating refresh tokens
-      return tokens.access_token;
-    } catch (error) {
-      if (error.code === 'invalid_grant' || error.code === 'invalid_client') discardTokens();
-      throw error;
-    } finally { refreshPromise = null; }
-  })();
-  return refreshPromise;
-}
-async function accessToken(forceRefresh = false) {
-  if (!clientId) throw new Error('Client ID не задан.');
-  if (!forceRefresh && tokens?.access_token && tokens.expires_at - Date.now() > 90000) {
-    return tokens.access_token;
-  }
-  return refreshAccessToken();
+  const connected=await auth.completeRedirect(params);
+  clientId=auth.clientId;
+  return connected;
 }
 async function authorizedFetch(url) {
-  let token = await accessToken();
-  let response = await fetch(url, {headers: {Authorization:`Bearer ${token}`},cache:'no-store'});
-  if (response.status===401) {
-    token = await accessToken(true);
-    response = await fetch(url, {headers: {Authorization:`Bearer ${token}`},cache:'no-store'});
-  }
-  return response;
+  return auth.authorizedFetch(url);
 }
 async function fetchCurrentlyPlaying() {
   return authorizedFetch(API_CURRENT);
@@ -327,7 +203,7 @@ async function poll() {
       throw new FatalError(getOAuthErrorMessage(response.status, details));
     }
   } catch (error) {
-    if (error instanceof FatalError || !tokens) {
+    if (error instanceof FatalError || !auth.hasSession) {
       console.error('Spotify Widget:', error.message);
       active = false;
       hideTrack();
@@ -344,42 +220,31 @@ async function poll() {
 }
 class FatalError extends Error {}
 function exportConnection() {
-  if (!tokens?.refresh_token || !clientId) {
-    showStatus('Сначала авторизуй Spotify в этом браузере.');
-    return;
-  }
-  els.transferInput.value = JSON.stringify({ version: 1, client_id: clientId, refresh_token: tokens.refresh_token });
-  els.transferInput.focus();
-  els.transferInput.select();
-  showStatus('Скопируй содержимое поля вручную (Ctrl+C), вставь в источник OBS и нажми «Импортировать». Не передавай никому.');
+  try {
+    els.transferInput.value = JSON.stringify(auth.exportConnection());
+    els.transferInput.focus();
+    els.transferInput.select();
+    showStatus('Скопируй JSON подключения и перенеси в OBS. Не публикуй и не передавай токен.');
+  } catch(error) { showStatus(error.message); }
 }
 function importConnection() {
   try {
-    const bundle = JSON.parse(els.transferInput.value);
-    if (bundle.version !== 1 || !/^[a-zA-Z0-9]{16,64}$/.test(bundle.client_id) ||
-        typeof bundle.refresh_token !== 'string' || bundle.refresh_token.length < 20 || bundle.refresh_token.length > 4096) {
-      throw new Error('Недопустимые данные импорта.');
-    }
-    // Transfer only refresh token; a fresh access token is obtained for the OBS instance.
-    clientId = bundle.client_id;
-    localStorage.setItem(KEYS.clientId, clientId);
-    tokens = { access_token: '', refresh_token: bundle.refresh_token, expires_at: 0 };
-    localStorage.setItem(KEYS.tokens, JSON.stringify(tokens));
-    els.transferInput.value = '';
-    els.clientInput.value = clientId;
-    showStatus('Данные импортированы. Проверяем доступ к Spotify...');
-    if (!active) { active = true; poll(); }
-  } catch (error) { showStatus(`Ошибка импорта: ${error.message}`); }
+    auth.importConnection(els.transferInput.value);
+    clientId=auth.clientId;
+    els.transferInput.value='';
+    els.clientInput.value=clientId;
+    showStatus('Подключение импортировано. Проверяем Spotify API...');
+    if (!active) { active=true; poll(); }
+  } catch(error) { showStatus(`Ошибка импорта: ${error.message}`); }
 }
 function disconnect() {
-  active = false;
-  if (pollTimer) clearTimeout(pollTimer);
+  active=false;
+  if(pollTimer) clearTimeout(pollTimer);
   clearVisibilityTimer();
-  discardTokens();
-  sessionStorage.removeItem(KEYS.state);
-  sessionStorage.removeItem(KEYS.verifier);
+  auth.disconnect();
   hideTrack();
-  showStatus('Авторизация сброшена. Для повторного подключения нажми кнопку выше.');
+  els.transferInput.value='';
+  showStatus('Авторизация сброшена.');
 }
 function resize() {
   const maxWidth = 550; // original design's approximately 500px body + margins
@@ -437,7 +302,7 @@ async function start() {
   }
   try { await processOAuthCallback(); }
   catch (e) { showStatus(`Ошибка подключения: ${e.message}`); return; }
-  if (!clientId || !tokens?.refresh_token) {
+  if (!auth.hasSession) {
     showStatus('Вставь Client ID и подключи Spotify. Секретный ключ не нужен.');
     return;
   }
